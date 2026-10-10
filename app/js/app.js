@@ -448,9 +448,23 @@ async function holeView(ctx) {
 
   // ---- pins
   const pinMoved = () => !!getPin();
+  // where yardages are measured from right now (same as the sheet): in a round the tee (GPS on the tee), you (GPS) or
+  // your last ball; otherwise the tee. Presets are laid out along the line from here, so Front/Back move the pin
+  // straight along my line and the front/back of the green stay put.
+  function measureFrom() {
+    if (ctx.mode !== "round") return teeP;
+    if (!rh.shots?.length) return teeToday();
+    return gpsNear() ? A.gps.p : ballSpot();
+  }
+  function approachFrom() {
+    const P = ph || (roundPlan ? roundPlan.holes[n] : null);
+    const line = playLine(h, measureFrom(), null, P ? planKeys.map(k => P[k]?.p) : []);
+    let i = line.length - 2; while (i > 0 && Geo.yd(line[i], h.greenCenter) < 30) i--;
+    return line[i];
+  }
   function drawPresets() {
     const box = $("#presets", s); box.innerHTML = "";
-    const pre = Geo.pinPresets(h.green, h.path[1], h.greenCenter);   // oriented along the approach into the green
+    const pre = Geo.pinPresets(h.green, approachFrom(), h.greenCenter);   // laid out along my line into the green
     ["Back Left", "Back Center", "Back Right", "Middle Left", "Middle Center", "Middle Right", "Front Left", "Front Center", "Front Right"].forEach(k => {
       const b = el(`<button>${k.replace("Middle Center", "Center").replace("Middle ", "Mid ")}</button>`);
       b.onclick = () => { setPin(k === "Middle Center" ? null : pre[k]); drawAll(); }; box.appendChild(b);
@@ -637,7 +651,7 @@ async function holeView(ctx) {
     const c = Math.round(before + Geo.yd(last, h.greenCenter));
     const bent = line.length > 2;
     return `<div class="yards"><b>${yd}</b><div><div class="muted">${esc(label)} to the pin${pinMoved() ? "" : " (center)"}${bent ? " · along the line of play" : ""}</div>
-      <div class="fcb">${fb ? `<span>F <b>${Math.round(before + fb.front)}</b></span>` : ""}<span>C <b>${c}</b></span>${fb ? `<span>B <b>${Math.round(before + fb.back)}</b></span>` : ""}</div>
+      <div class="fcb">${fb ? `<span>F <b>${Math.round(before + fb.front)}</b></span>` : ""}<span>M <b>${c}</b></span>${fb ? `<span>B <b>${Math.round(before + fb.back)}</b></span>` : ""}</div>
       ${playsLikeOn(ctx.slug) ? `<div class="pl">Plays like ~${plays(ctx.slug, yd)} (estimate, ${meta(ctx.slug).elevationFt.toLocaleString()} ft)</div>` : ""}</div></div>`;
   }
   function renderSheet() {

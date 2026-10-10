@@ -166,6 +166,7 @@ function screen(title, back, body) {
 async function home() {
   if (!A.index.length) await loadIndex();
   const b = screen("Driven Golf", null, "");
+  const pr = el(`<button class="btn">Plan a round</button>`); pr.onclick = planWizard; b.appendChild(pr);
   b.appendChild(el(`<h2>Courses</h2>`));
   const list = el(`<div class="card list"></div>`);
   A.index.forEach(c => {
@@ -188,13 +189,14 @@ async function home() {
     it.onclick = () => roundSummary(r.id); rl.appendChild(it);
   });
   b.appendChild(rl);
-  const st = el(`<button class="btn alt">Settings: home elevation and club distances</button>`); st.onclick = settingsPage; b.appendChild(st);
+  const st = el(`<button class="btn alt">Settings: home elevation, club distances, preferred tees</button>`); st.onclick = settingsPage; b.appendChild(st);
 }
 
 async function coursePage(slug) {
   const course = await loadCourse(slug); const m = meta(slug);
   const b = screen(m.name, home, "");
-  let tee = Store.get("lastTee:" + slug, course.teeOrder[0]);
+  const prefTee = A.settings.prefTees?.[slug];
+  let tee = [prefTee, Store.get("lastTee:" + slug, null), course.teeOrder[0]].find(t => t && course.teeOrder.includes(t));
   const card = el(`<div class="card"><h3>${esc(m.course)}</h3><p>${esc(m.city)} · par ${course.par.reduce((a, c) => a + c, 0)}${m.elevationFt != null ? ` · ${m.elevationFt.toLocaleString()} ft elevation` : ""}</p>
     <div class="muted">Tees</div><div class="chips" id="tees"></div><div class="muted" id="teeYd"></div>
     ${m.unconfirmedTees ? '<div class="warn">These yardages are measured from the map, not the scorecard. Check them against the card at the course.</div>' : ""}
@@ -221,6 +223,28 @@ async function coursePage(slug) {
   b.appendChild(pl);
 }
 
+// Plan a round: club -> course (when the club has more than one) -> tees (my preferred tees first) -> hole-by-hole plan
+function planWizard() {
+  const clubs = [...new Set(A.index.map(c => c.name))];
+  const step = (title, items, pick) => {
+    const md = modal(`<h3 style="margin:0">${esc(title)}</h3><div class="list" id="wl"></div><button class="btn alt" id="wx">Cancel</button>`);
+    items.forEach(([label, sub, v]) => { const it = el(`<div class="item"><div class="grow"><b>${esc(label)}</b>${sub ? `<small>${esc(sub)}</small>` : ""}</div><span>›</span></div>`);
+      it.onclick = () => { md.remove(); pick(v); }; $("#wl", md).appendChild(it); });
+    $("#wx", md).onclick = () => md.remove();
+  };
+  const tees = async slug => {
+    const course = await loadCourse(slug), pref = A.settings.prefTees?.[slug];
+    const order = pref && course.teeOrder.includes(pref) ? [pref, ...course.teeOrder.filter(t => t !== pref)] : course.teeOrder;
+    step(`${meta(slug).name} · ${meta(slug).course} · tees`, order.map(t => [t, `${course.tees[t].reduce((a, c) => a + c, 0).toLocaleString()} yd${t === pref ? " · your preferred tees" : ""}`, t]),
+      t => newPlan(slug, t));
+  };
+  step("Plan a round · club", clubs.map(n => [n, A.index.find(c => c.name === n).city, n]), name => {
+    const courses = A.index.filter(c => c.name === name);
+    if (courses.length === 1) return tees(courses[0].slug);
+    step(`${name} · course`, courses.map(c => [c.course, null, c.slug]), tees);
+  });
+}
+
 function settingsPage() {
   const s = A.settings;
   const b = screen("Settings", home, "");
@@ -237,7 +261,18 @@ function settingsPage() {
     s.bag = s.bag.map(([club], i) => [club, +$("#bag" + i, bag).value || 0]);
     Store.saveSettings(s); A.settings = Store.settings(); toast("Settings saved"); home();
   };
-  b.append(c, bag, save);
+  // preferred tees per course: the default when planning or starting a round
+  const pt = el(`<div class="card"><h3>Preferred tees</h3><p>The tees you usually play. Plans and rounds start here.</p><div id="pt" class="list"></div></div>`);
+  s.prefTees = s.prefTees || {};
+  A.index.forEach(async m => {
+    const course = await loadCourse(m.slug);
+    const r = el(`<div class="item" style="cursor:default;flex-wrap:wrap"><div class="grow"><b>${esc(m.name)}</b><small>${esc(m.course)}</small></div><div class="chips"></div></div>`);
+    const draw = () => { const box = $(".chips", r); box.innerHTML = "";
+      course.teeOrder.forEach(t => { const ch = el(`<button class="chip${s.prefTees[m.slug] === t ? " on" : ""}">${esc(t)}</button>`);
+        ch.onclick = () => { s.prefTees[m.slug] = t; draw(); }; box.appendChild(ch); }); };
+    draw(); $("#pt", pt).appendChild(r);
+  });
+  b.append(c, bag, pt, save);
 }
 
 // ---------------------------------------------------------------- rounds & plans: create
@@ -768,6 +803,9 @@ async function holeView(ctx) {
       } else if (P) html += `<div class="muted">Plan: ${planKeys.filter(k => P[k]?.p).map(k => `${KEYNAME[k]} ${esc(P[k].club || "")}`).join(" → ") || "no targets"}${P.danger ? ` · danger ${P.danger}` : ""}${P.score ? ` · planned ${P.score}` : ""}${P.note ? ` · “${esc(P.note)}”` : ""}</div>`;
       const nsh = Math.max(0, (rh.shots?.length || 0) - 1);
       const nextNo = nsh + 1;
+      // the planned club for this shot (re-picked when the tee moved) is pre-selected once; tap another chip to change it
+      const planClub = repick && nsh === 0 ? repick.to : P && planKeys[nsh] ? P[planKeys[nsh]]?.club : null;
+      if (planClub && rh.clubFor !== nsh && !rh.nextClub) { rh.nextClub = planClub; rh.clubFor = nsh; }
       html += `<div class="muted">Shot ${nextNo} club${repick && nsh === 0 ? ` (plan: ${esc(repick.from)} → ${esc(repick.to)} today)` : P && planKeys[nsh] && P[planKeys[nsh]]?.club ? ` (plan: ${esc(P[planKeys[nsh]].club)})` : ""}</div><div class="chips" id="clubs">${A.settings.bag.map(([c]) => `<button class="chip${rh.nextClub === c ? " on" : ""}" data-club="${esc(c)}">${esc(c)}</button>`).join("")}<button class="chip${rh.nextClub === "Putter" ? " on" : ""}" data-club="Putter">Putter</button></div>
         <div class="row"><button class="btn" id="atBall">I'm at my ball</button><button class="btn alt" id="tapBall">Tap ball</button></div>
         <div class="row"><button class="btn alt" id="onGreen">On green</button><button class="btn alt" id="pen">Penalty +1${rh.penalties ? ` (${rh.penalties})` : ""}</button><button class="btn alt" id="undo">Undo</button></div>

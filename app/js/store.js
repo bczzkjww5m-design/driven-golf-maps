@@ -7,6 +7,7 @@ const Store = {
   settings() {
     return Object.assign({
       homeElevationFt: 900,           // Twin Cities
+      prefTees: {},                   // preferred tee set per course: {slug: tee name}
       bag: [["Driver", 230], ["3 wood", 210], ["5 wood", 195], ["4 hybrid", 185], ["5 iron", 172], ["6 iron", 162],
             ["7 iron", 151], ["8 iron", 140], ["9 iron", 129], ["PW", 117], ["GW", 104], ["SW", 90], ["LW", 72]],
     }, Store.get("settings", {}));

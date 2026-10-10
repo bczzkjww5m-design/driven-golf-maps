@@ -2,8 +2,11 @@
 const YD = 1.09361;
 const Geo = {
   // local flat metres around an origin (accurate at golf-hole scale)
-  xy(p, o) { const k = Math.cos(o[0] * Math.PI / 180); return [(p[1] - o[1]) * 111320 * k, (p[0] - o[0]) * 110540]; },
-  ll(xy, o) { const k = Math.cos(o[0] * Math.PI / 180); return [o[0] + xy[1] / 110540, o[1] + xy[0] / (111320 * k)]; },
+  // metres per degree of latitude / longitude at latitude lat (WGS84 series; 110540 is only right at the equator)
+  mPerDeg(lat) { const f = lat * Math.PI / 180;
+    return [111132.92 - 559.82 * Math.cos(2 * f) + 1.175 * Math.cos(4 * f), 111412.84 * Math.cos(f) - 93.5 * Math.cos(3 * f)]; },
+  xy(p, o) { const [mLat, mLng] = Geo.mPerDeg(o[0]); return [(p[1] - o[1]) * mLng, (p[0] - o[0]) * mLat]; },
+  ll(xy, o) { const [mLat, mLng] = Geo.mPerDeg(o[0]); return [o[0] + xy[1] / mLat, o[1] + xy[0] / mLng]; },
   m(a, b) { const d = Geo.xy(b, a); return Math.hypot(d[0], d[1]); },
   yd(a, b) { return Geo.m(a, b) * YD; },
 

@@ -29,7 +29,8 @@ const Store = {
   // avoid zones per course: {n: [{id, name, color:'red'|'yellow', ring}]}
   avoid(course) { return Store.get("avoid:" + course, {}); },
   saveAvoid(course, v) { Store.set("avoid:" + course, v); },
-  // tee spots the golfer fixed, per course: {"16:A": [lat, lng]} (override the course data everywhere)
-  teeFixes(course) { return Store.get("teeFix:" + course, {}); },
-  saveTeeFixes(course, v) { Store.set("teeFix:" + course, v); },
 };
+
+// Tee markers are set by the course, not the golfer: remove tee moves saved by an earlier version (teeFix:<course>).
+// Only those keys; rounds, plans, pins and the bag are untouched.
+try { Object.keys(localStorage).filter(k => k.startsWith("dg:teeFix:")).forEach(k => localStorage.removeItem(k)); } catch {}

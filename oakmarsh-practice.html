@@ -158,7 +158,9 @@ let view = "shot";
 let mode = "ball";                        // what a tap does: ball | add | move | finish
 
 // ---------- geometry helpers (local flat metres, fine at practice-green scale) ----------
-const toXY = (p, o) => ({ x: (p.lng - o.lng) * 111320 * Math.cos(o.lat * Math.PI / 180), y: (p.lat - o.lat) * 110540 });
+// metres per degree at this latitude (WGS84 series; 110540 is only right at the equator)
+const toXY = (p, o) => { const f = o.lat * Math.PI / 180;
+  return { x: (p.lng - o.lng) * (111412.84 * Math.cos(f) - 93.5 * Math.cos(3 * f)), y: (p.lat - o.lat) * (111132.92 - 559.82 * Math.cos(2 * f) + 1.175 * Math.cos(4 * f)) }; };
 const dist = (a, b) => L.latLng(a).distanceTo(L.latLng(b));
 const greens = BASEMAP.features.filter(f => f.properties.kind === "green").map(f => {
   const ring = (f.geometry.type === "Polygon" ? f.geometry.coordinates : f.geometry.coordinates[0])[0];

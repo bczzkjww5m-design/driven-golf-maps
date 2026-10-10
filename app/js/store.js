@@ -29,6 +29,10 @@ const Store = {
   // avoid zones per course: {n: [{id, name, color:'red'|'yellow', ring}]}
   avoid(course) { return Store.get("avoid:" + course, {}); },
   saveAvoid(course, v) { Store.set("avoid:" + course, v); },
+  // hidden data check: where the golfer really teed off with GPS, per course/hole/tee set (shows where tee boxes are)
+  // [{course, hole, tee, p:[lat,lng], acc (yd), marker:[lat,lng], t}] · read via app/#teelog, merged by scripts/26
+  teeLog() { return Store.get("teeLog", []); },
+  logTee(e) { const all = Store.teeLog(); all.push(e); Store.set("teeLog", all.slice(-2000)); },
 };
 
 // Tee markers are set by the course, not the golfer: remove tee moves saved by an earlier version (teeFix:<course>).

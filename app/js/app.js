@@ -51,14 +51,20 @@ function usgaYd(h, p) {
   return Geo.length(pts) * YD;
 }
 const pinOrCenter = (h, pin) => pin || h.greenCenter;
-// line of play from a spot to the pin: through planned targets still ahead, else through the hole's bends
+// line of play from a spot to the pin: through planned targets still ahead; with no plan, the USGA way (the same rule
+// that set the scorecard markers): straight to the pin, bending only at the hole's pivot when it's ahead of you, well
+// short of the pin, and the hole really bends there (more than ~10 yd off the straight line)
 function playLine(h, from, pin, targets = []) {
   const path = h.path.slice().reverse();                      // tee ... green center
   const s0 = Geo.along(path, from).m;
   const pinP = pinOrCenter(h, pin);
-  const ahead = targets.filter(t => t && Geo.along(path, t).m > s0 + 10 && Geo.yd(t, pinP) > 15);   // targets on the green add nothing
-  let mids = ahead.length ? ahead : path.slice(1, -1).filter(p => Geo.along(path, p).m > s0 + 10);
-  return [from, ...mids, pinOrCenter(h, pin)];
+  const ahead = targets.filter(t => t && Geo.along(path, t).m > s0 + 10 && Geo.yd(t, pinP) > 30 && !Geo.inRing(t, h.green));   // targets on or by the green add nothing
+  if (ahead.length) return [from, ...ahead, pinP];
+  const pts = [from];
+  (h.pivots || []).filter(q => Geo.along(path, q).m > s0 + 10 && Geo.yd(q, pinP) > 30).forEach(q => {
+    if (Geo.along([pts.at(-1), pinP], q).lateralM > 9) pts.push(q);
+  });
+  return [...pts, pinP];
 }
 function clubFor(yards) {
   const bag = A.settings.bag; if (!yards) return null;
@@ -284,6 +290,18 @@ function loupeShow(clientX, clientY, ll, zoom) {
   loupeMap.setView(ll, Math.min(zoom + 2, 23), { animate: false });
 }
 const loupeClose = () => { if (loupe) loupe.hidden = true; };
+// loupe that follows a marker while it's dragged (the pin)
+function dragLoupe(map, getBaseLayer) {
+  let open = false;
+  return {
+    move(ll) {
+      if (!open) { loupeOpen(getBaseLayer); open = true; }
+      const r = map.getContainer().getBoundingClientRect(), pt = map.latLngToContainerPoint(ll);
+      loupeShow(r.left + pt.x, r.top + pt.y, ll, map.getZoom());
+    },
+    end() { if (open) loupeClose(); open = false; },
+  };
+}
 
 // press-and-hold magnifier: a loupe above the finger, the marker drops where you let go
 function attachHold(map, getBaseLayer, onDrop, enabled) {
@@ -333,6 +351,19 @@ async function holeView(ctx) {
   const getPin = () => (rh ? rh.pin : ph ? ph.pin : ctx.pins?.[n]) || null;
   const setPin = p => { if (rh) rh.pin = p; else if (ph) ph.pin = p; else (ctx.pins = ctx.pins || {})[n] = p; persist(); };
   const persist = () => { if (round) Store.saveRound(round); if (plan) Store.savePlan(plan); };
+  // keep the pin on the green: a drop off the green goes to the nearest point 1 m inside its edge
+  const onGreen = p => {
+    if (!p || Geo.inRing(p, h.green)) return p;
+    let best = null;
+    for (let i = 0; i < h.green.length - 1; i++) {
+      const A = Geo.xy(h.green[i], p), B = Geo.xy(h.green[i + 1], p), dx = B[0] - A[0], dy = B[1] - A[1];
+      const t = Math.max(0, Math.min(1, -(A[0] * dx + A[1] * dy) / (dx * dx + dy * dy || 1e-9)));
+      const q = [A[0] + t * dx, A[1] + t * dy], d = Math.hypot(q[0], q[1]);
+      if (!best || d < best.d) best = { d, q };
+    }
+    const c = Geo.xy(h.greenCenter, p), k = 1 / (Math.hypot(c[0] - best.q[0], c[1] - best.q[1]) || 1);
+    return Geo.ll([best.q[0] + (c[0] - best.q[0]) * k, best.q[1] + (c[1] - best.q[1]) * k], p);
+  };
   const prefs = Store.get("viewPrefs", { base: "map" });
   let view = "hole", tapMode = null, selectedHz = null, trace = null;
   const modeTitle = ctx.mode === "plan" ? "Plan" : ctx.mode === "round" ? "Round" : "Browse";
@@ -369,16 +400,21 @@ async function holeView(ctx) {
   let featLayer = null; const top = L.layerGroup().addTo(map);
   const holeBounds = () => L.latLngBounds([teeP, h.greenCenter, ...h.path.slice(1, -1)]).pad(0.12);
   const greenBounds = () => L.latLngBounds(h.green).pad(0.35);
-  const frame = () => view === "green" ? map.fitBounds(greenBounds(), { paddingTopLeft: [10, 90], paddingBottomRight: [10, 60] }) : map.fitBounds(holeBounds(), { paddingTopLeft: [10, 90], paddingBottomRight: [10, 40] });
+  const frame = () => {
+    map.invalidateSize({ animate: false });                 // the sheet below changes height: re-measure the map first
+    if (view === "green") map.fitBounds(greenBounds(), { paddingTopLeft: [10, 90], paddingBottomRight: [10, tapMode === "pin" ? 200 : 60] });   // room for the presets
+    else map.fitBounds(holeBounds(), { paddingTopLeft: [10, 90], paddingBottomRight: [10, 40] });
+  };
   const setBase = b => { base = b; prefs.base = b; Store.set("viewPrefs", prefs);
     s.querySelectorAll("[data-b]").forEach(x => x.classList.toggle("on", x.dataset.b === b));
     if (b === "aerial") aerial.addTo(map); else aerial.remove(); drawAll(); };
-  const setView = v => { view = v; s.querySelectorAll("[data-v]").forEach(x => x.classList.toggle("on", x.dataset.v === v)); frame(); drawAll(); };
+  const setView = v => { view = v; s.querySelectorAll("[data-v]").forEach(x => x.classList.toggle("on", x.dataset.v === v)); drawAll(); frame(); };   // draw (sheet height) first, then frame
   s.querySelectorAll("[data-b]").forEach(x => x.onclick = () => setBase(x.dataset.b));
   s.querySelectorAll("[data-v]").forEach(x => x.onclick = () => setView(x.dataset.v));
   $("#reset", s).onclick = frame;
   const loupeBase = () => L.imageOverlay(h.aerial.img, h.aerial.bounds);
   const wasHold = attachHold(map, loupeBase, ll => onTap(ll), () => !!tapMode);
+  const pinLoupe = dragLoupe(map, loupeBase);
   map.on("click", e => { if (wasHold()) return; onTap([e.latlng.lat, e.latlng.lng]); });
 
   // ---- what a tap does
@@ -397,7 +433,7 @@ async function holeView(ctx) {
   $("#hintDone", s).onclick = () => { if (tapMode === "trace") finishTrace(); else { setTap(null); if (view === "green") setView("hole"); } };
   function onTap(p) {
     if (!tapMode) return;
-    if (tapMode === "pin") { setPin(p); drawAll(); return; }
+    if (tapMode === "pin") { setPin(onGreen(p)); drawAll(); return; }
     if (["teeTarget", "layup", "approach"].includes(tapMode)) {
       const k = tapMode; const from = planOrigin(k); const yd = Geo.yd(from, p);
       ph[k] = { p, club: ph[k]?.clubSet ? ph[k].club : clubFor(plays(ctx.slug, yd)), clubSet: ph[k]?.clubSet };
@@ -450,7 +486,11 @@ async function holeView(ctx) {
   function ballSpot() { const sh = rh?.shots || []; return sh.length ? sh.at(-1).p : teeToday(); }
   function addBall(p, src, onGreen = false) {
     const sh = shots();
-    if (!sh.length) sh.push({ p: teeToday(), club: rh.nextClub || null, src: onTeeGPS() ? "gps tee" : "tee" });   // where you really teed off
+    if (!sh.length) {                                        // where you really teed off
+      const gpsTee = onTeeGPS();
+      sh.push({ p: teeToday(), club: rh.nextClub || null, src: gpsTee ? "gps tee" : "tee" });
+      if (gpsTee) Store.logTee({ course: ctx.slug, hole: n, tee, p: A.gps.p, acc: Math.round(A.gps.acc), marker: teeP, t: Date.now() });
+    }
     else if (rh.nextClub) sh.at(-1).club = rh.nextClub;
     sh.push({ p, club: null, src, onGreen });
     rh.nextClub = null; persist(); drawAll();
@@ -557,7 +597,8 @@ async function holeView(ctx) {
     $("#pinLabel", s).textContent = pinMoved() ? "Pin: moved" : "Pin: center (default)";
     L.marker(teeP, { icon: teeIcon, interactive: false, pane: "lines" }).addTo(top);
     const pm = L.marker(pin, { icon: pinIcon(pinMoved()), draggable: tapMode === "pin", zIndexOffset: 800 }).addTo(top);
-    pm.on("dragend", e => { const ll = e.target.getLatLng(); setPin([ll.lat, ll.lng]); drawAll(false); });
+    pm.on("drag", e => pinLoupe.move(e.target.getLatLng()));
+    pm.on("dragend", e => { pinLoupe.end(); const ll = e.target.getLatLng(); setPin(onGreen([ll.lat, ll.lng])); drawAll(false); });
     pm.on("click", () => { if (ctx.mode !== "round" || true) setTap(tapMode === "pin" ? null : "pin"); });
     if (view === "green") [3, 6, 10].forEach(ft => L.circle(pin, { radius: ft / 3.28084, color: "#fff", weight: 1, opacity: .6, fill: false, interactive: false, pane: "lines" }).addTo(top));
     // planned targets + planned line
@@ -592,7 +633,7 @@ async function holeView(ctx) {
     let li = line.length - 2; while (li > 0 && Geo.yd(line[li], pin) < 30) li--;
     const last = line[li], before = Geo.length(line.slice(0, li + 1)) * YD;
     const yd = Math.round(total);
-    const fb = Geo.frontBack(h.green, last, h.greenCenter);   // front/back of the green itself, through its center
+    const fb = Geo.frontBack(h.green, last, pin);   // where my line to the pin enters (front) and leaves (back) the green; C = green center
     const c = Math.round(before + Geo.yd(last, h.greenCenter));
     const bent = line.length > 2;
     return `<div class="yards"><b>${yd}</b><div><div class="muted">${esc(label)} to the pin${pinMoved() ? "" : " (center)"}${bent ? " · along the line of play" : ""}</div>
@@ -793,4 +834,15 @@ async function roundSummary(id) {
     $("#n", md).onclick = () => md.remove(); $("#y", md).onclick = () => { Store.deleteRound(r.id); md.remove(); home(); }; };
 }
 
-home().catch(e => { app.innerHTML = `<div class="body"><div class="card"><h3>Couldn't load course data</h3><p>${esc(e.message)}</p></div></div>`; });
+// hidden data-check page (app/#teelog): the GPS tee-off spots saved on this phone, to copy to Claude
+function teeLogPage() {
+  const text = JSON.stringify(Store.teeLog(), null, 1);
+  app.innerHTML = `<div class="body"><div class="card"><h3>Tee-off log (${Store.teeLog().length})</h3>
+    <p class="muted">Where you teed off with GPS. Copy this and send it to Claude.</p><textarea readonly style="height:300px;font:12px ui-monospace,monospace"></textarea>
+    <div class="row"><button class="btn" id="cp">Copy</button><a class="btn alt" href="./" style="text-align:center;text-decoration:none">Back to the app</a></div></div></div>`;
+  $("textarea").value = text;
+  $("#cp").onclick = async e => { try { await navigator.clipboard.writeText(text); } catch { $("textarea").select(); document.execCommand("copy"); } e.target.textContent = "Copied"; };
+  return Promise.resolve();
+}
+
+(location.hash === "#teelog" ? teeLogPage() : home()).catch(e => { app.innerHTML = `<div class="body"><div class="card"><h3>Couldn't load course data</h3><p>${esc(e.message)}</p></div></div>`; });

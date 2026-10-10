@@ -41,7 +41,37 @@ function holeFeatures(course, n) {
 const hazards = (course, n) => holeFeatures(course, n).filter(f => HAZARD_KINDS.includes(f.properties.kind));
 
 // ---------------------------------------------------------------- yardage helpers
-function teePoint(course, n, tee) { const h = holeOf(course, n); return h.tees[tee] || h.tees[course.teeOrder[0]]; }
+function teePoint(course, n, tee) {
+  const fix = Store.teeFixes(course.slug)[`${n}:${tee}`]; if (fix) return fix;
+  const h = holeOf(course, n); return h.tees[tee] || h.tees[course.teeOrder[0]];
+}
+// tee check, measured the USGA way: horizontal straight lines from the tee to the green center, pivoting only at a
+// dogleg. The hole map has no surveyed bend, so the first pivot sits on the fairway-center line 250 yd past the middle
+// tee (placed by its card yardage); later bend points (par-5 layup) can be a second pivot. A pivot counts only if it's
+// ahead of the tee and more than ~10 yd off the straight line. Bends behind the tee don't count.
+const TEE_FLAG_YD = 10, DOGLEG_M = 9, PIVOT_YD = 250;
+function holePivots(course, h) {
+  const path = h.path.slice().reverse(), len = Geo.length(path);   // tee ... green center
+  const mid = course.teeOrder[Math.floor((course.teeOrder.length - 1) / 2)];
+  const s1 = len - cardYards(course, mid, h.n) / YD + PIVOT_YD / YD;
+  if (s1 > len - 30) return [];                                     // short hole: no pivot
+  return [Geo.pointAt(path, s1), ...path.slice(1, -1).filter(p => Geo.along(path, p).m > s1 + 10)];
+}
+function usgaYd(course, h, tee) {
+  const path = h.path.slice().reverse(), s0 = Geo.along(path, tee).m, green = h.greenCenter;
+  const pts = [tee];
+  holePivots(course, h).filter(p => Geo.along(path, p).m > s0 + 10).forEach(p => {
+    if (Geo.along([pts.at(-1), green], p).lateralM > DOGLEG_M) pts.push(p);
+  });
+  pts.push(green);
+  return Math.round(Geo.length(pts) * YD);
+}
+const measuredYd = (course, n, tee) => usgaYd(course, holeOf(course, n), teePoint(course, n, tee));
+function teeCheck(course, n, tee) {
+  const card = cardYards(course, tee, n), yd = measuredYd(course, n, tee);
+  return { n, tee, card, yd, diff: yd - card, flagged: Math.abs(yd - card) > TEE_FLAG_YD, fixed: !!Store.teeFixes(course.slug)[`${n}:${tee}`] };
+}
+const teeFlags = course => course.holes.flatMap(h => course.teeOrder.map(t => teeCheck(course, h.n, t))).filter(c => c.flagged);
 const pinOrCenter = (h, pin) => pin || h.greenCenter;
 // line of play from a spot to the pin: through planned targets still ahead, else through the hole's bends
 function playLine(h, from, pin, targets = []) {
@@ -160,6 +190,7 @@ async function coursePage(slug) {
   $("#startRound", card).onclick = () => startRound(slug, tee);
   $("#plan", card).onclick = () => newPlan(slug, tee);
   $("#browse", card).onclick = () => holeView({ mode: "browse", slug, tees: tee, n: 1, pins: {} });
+  b.appendChild(teeCheckCard(course, slug));
   const plans = Store.plans().filter(p => p.course === slug).sort((a, b) => b.created - a.created);
   b.appendChild(el(`<h2>Plans</h2>`));
   const pl = el(`<div class="card list"></div>`);
@@ -167,6 +198,33 @@ async function coursePage(slug) {
   plans.forEach(p => { const it = el(`<div class="item"><div class="grow"><b>${esc(p.name)}</b><small>${esc(p.tees)} tees · planned ${planTotal(p) || "–"}</small></div><span>›</span></div>`);
     it.onclick = () => planSummary(p.id); pl.appendChild(it); });
   b.appendChild(pl);
+}
+
+// every tee measuring more than 10 yd off the card, to work through one by one in Fix tees
+function teeCheckCard(course, slug) {
+  const flags = teeFlags(course), fixes = Store.teeFixes(slug), nFix = Object.keys(fixes).length;
+  const card = el(`<div class="card"><h3>Tee check</h3>
+    <p class="muted">${flags.length ? `${flags.length} tee${flags.length > 1 ? "s" : ""} measure more than ${TEE_FLAG_YD} yards off the scorecard. Tap one to fix it.` : `Every tee is within ${TEE_FLAG_YD} yards of the scorecard.`}${nFix ? ` You've fixed ${nFix}.` : ""}</p>
+    <div class="list" id="tf"></div>
+    ${nFix ? '<div class="row"><button class="btn alt" id="share">Send my tee fixes</button></div>' : ""}</div>`);
+  flags.forEach(f => {
+    const it = el(`<div class="item"><div class="grow"><b>Hole ${f.n} · ${esc(f.tee)}</b><small>card ${f.card} · measures ${f.yd}${f.fixed ? " · moved by you" : ""}</small></div>
+      <span class="pill ${Math.abs(f.diff) > 20 ? "red" : "yellow"}">⚑ ${f.diff > 0 ? "+" : ""}${f.diff}</span><span>›</span></div>`);
+    it.onclick = () => holeView({ mode: "browse", slug, tees: f.tee, n: f.n, pins: {}, fixTee: f.tee });
+    $("#tf", card).appendChild(it);
+  });
+  if (nFix) $("#share", card).onclick = () => {
+    // same shape as data/<slug>/tee_corrections.json, so the fixes can go into the course data for everyone
+    const out = { tees: Object.fromEntries(Object.entries(fixes).map(([k, p]) => [k, { latlng: p, how: "moved by you" }])) };
+    const text = JSON.stringify(out, null, 1);
+    const md = modal(`<h3 style="margin:0">Your tee fixes (${nFix})</h3><p class="muted">Send this to Claude to build them into the course for everyone.</p>
+      <textarea readonly style="height:140px;font:12px ui-monospace,monospace"></textarea>
+      <div class="row"><button class="btn" id="cp">Copy</button><button class="btn alt" id="dl">Download file</button></div>`);
+    $("textarea", md).value = text;
+    $("#cp", md).onclick = async e => { try { await navigator.clipboard.writeText(text); } catch { $("textarea", md).select(); document.execCommand("copy"); } e.target.textContent = "Copied"; };
+    $("#dl", md).onclick = () => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: "application/json" })); a.download = `${slug}_tee_fixes.json`; a.click(); };
+  };
+  return card;
 }
 
 function settingsPage() {
@@ -262,24 +320,44 @@ const ballIcon = L.divIcon({ className: "", iconSize: [16, 16], html: '<div clas
 const tgtIcon = (t, plan) => L.divIcon({ className: "", iconSize: [26, 26], html: `<div class="tgt${plan ? " plan" : ""}">${esc(t)}</div>` });
 const teeIcon = L.divIcon({ className: "", iconSize: [14, 14], html: '<div style="width:14px;height:14px;border-radius:3px;background:#fff;border:2px solid #16231a"></div>' });
 
+// magnifier (loupe): a round zoomed view of the aerial shown above the finger; one shared loupe for the whole app
+let loupeMap = null;
+const LOUPE_LIFT = 95;
+function loupeOpen(getBaseLayer) {
+  if (!loupe) { loupe = el('<div class="loupe" hidden><div class="lm"></div></div>'); document.body.appendChild(loupe); }
+  if (loupeMap) loupeMap.remove();
+  loupeMap = L.map(loupe.firstChild, { zoomControl: false, attributionControl: false, dragging: false, touchZoom: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false, maxZoom: 25, zoomSnap: 0 });
+  getBaseLayer().addTo(loupeMap); loupe.hidden = false; loupeMap.invalidateSize({ animate: false });
+}
+function loupeShow(clientX, clientY, ll, zoom) {
+  loupe.style.left = (clientX - 65) + "px"; loupe.style.top = Math.max(4, clientY - 65 - LOUPE_LIFT) + "px";
+  loupeMap.setView(ll, Math.min(zoom + 2, 23), { animate: false });
+}
+const loupeClose = () => { if (loupe) loupe.hidden = true; };
+// loupe that follows a marker while it's dragged
+function dragLoupe(map, getBaseLayer) {
+  let open = false;
+  return {
+    move(ll) {
+      if (!open) { loupeOpen(getBaseLayer); open = true; }
+      const r = map.getContainer().getBoundingClientRect(), pt = map.latLngToContainerPoint(ll);
+      loupeShow(r.left + pt.x, r.top + pt.y, ll, map.getZoom());
+    },
+    end() { if (open) loupeClose(); open = false; },
+  };
+}
+
 // press-and-hold magnifier: a loupe above the finger, the marker drops where you let go
 function attachHold(map, getBaseLayer, onDrop, enabled) {
-  const HOLD = 350, MOVE = 10, LIFT = 95; let hold = null, suppress = 0, lmap = null;
-  if (!loupe) { loupe = el('<div class="loupe" hidden><div class="lm"></div></div>'); document.body.appendChild(loupe); }
+  const HOLD = 350, MOVE = 10; let hold = null, suppress = 0;
   const box = map.getContainer();
-  const show = e => {
-    const ll = map.mouseEventToLatLng(e); hold.ll = ll;
-    loupe.style.left = (e.clientX - 65) + "px"; loupe.style.top = Math.max(4, e.clientY - 65 - LIFT) + "px";
-    lmap.setView(ll, Math.min(map.getZoom() + 2, 23), { animate: false });
-  };
+  const show = e => { const ll = map.mouseEventToLatLng(e); hold.ll = ll; loupeShow(e.clientX, e.clientY, ll, map.getZoom()); };
   const start = e => {
-    hold.active = true; map.dragging.disable(); map.touchZoom.disable(); loupe.hidden = false;
-    if (lmap) lmap.remove();
-    lmap = L.map(loupe.firstChild, { zoomControl: false, attributionControl: false, dragging: false, touchZoom: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false, maxZoom: 25, zoomSnap: 0 });
-    getBaseLayer().addTo(lmap); lmap.invalidateSize({ animate: false }); show(e);
+    hold.active = true; map.dragging.disable(); map.touchZoom.disable();
+    loupeOpen(getBaseLayer); show(e);
     if (navigator.vibrate) navigator.vibrate(10);
   };
-  const end = () => { if (!hold) return; clearTimeout(hold.t); if (hold.active) { loupe.hidden = true; map.dragging.enable(); map.touchZoom.enable(); } hold = null; };
+  const end = () => { if (!hold) return; clearTimeout(hold.t); if (hold.active) { loupeClose(); map.dragging.enable(); map.touchZoom.enable(); } hold = null; };
   const pts = new Map();
   box.addEventListener("pointerdown", e => {
     pts.set(e.pointerId, 1);
@@ -319,12 +397,14 @@ async function holeView(ctx) {
   const persist = () => { if (round) Store.saveRound(round); if (plan) Store.savePlan(plan); };
   const prefs = Store.get("viewPrefs", { base: "map" });
   let view = "hole", tapMode = null, selectedHz = null, trace = null;
+  let fixSel = ctx.fixTee || tee;                         // Fix tees: the tee a tap places
+  const teeChk = teeCheck(course, n, tee);
   const modeTitle = ctx.mode === "plan" ? "Plan" : ctx.mode === "round" ? "Round" : "Browse";
 
   const s = el(`<div class="hole">
     <div class="bar"><button class="back" aria-label="Back">‹</button>
       <div style="flex:1;min-width:0"><div class="holenav"><button id="prev" aria-label="Previous hole">‹</button><span class="hn">Hole ${n}</span><button id="next" aria-label="Next hole">›</button>
-      <span class="sub">par ${h.par} · ${cardYards(course, tee, n)} yd</span></div>
+      <span class="sub">par ${h.par} · ${cardYards(course, tee, n)} yd</span>${teeChk.flagged ? `<button class="pill yellow" id="teeFlag" style="border:0;cursor:pointer;font:700 11px system-ui;margin-left:4px">⚑ ${teeChk.diff > 0 ? "+" : ""}${teeChk.diff}</button>` : ""}</div>
       <div class="sub">${esc(modeTitle)} · ${esc(m.name)} · <button id="teeBtn" style="all:unset;cursor:pointer;text-decoration:underline">${esc(tee)} tees${tee !== ctx.tees ? " (this hole)" : ""}</button></div></div>
       <button class="btn small alt" id="menu">⋯</button></div>
     <div class="mapwrap"><div id="map"></div>
@@ -369,15 +449,18 @@ async function holeView(ctx) {
   const HINTS = { pin: "Drag the flag, tap the green, or pick a preset. Press and hold to magnify.",
     teeTarget: "Tap where you want your tee shot to finish.", layup: "Tap your layup target.", approach: "Tap your approach target.",
     ball: "Tap where your ball is. Press and hold to magnify.", green: "Tap where your ball finished on the green.",
-    trace: "Tap around the area to outline it, then press Done." };
+    trace: "Tap around the area to outline it, then press Done.",
+    fixTee: "Drag any tee, or tap to place the selected one. Press and hold to magnify." };
   function setTap(mode) {
     tapMode = mode;
-    $("#hint", s).hidden = !mode; $("#hintText", s).textContent = mode ? HINTS[mode] : "";
+    $("#hint", s).hidden = !mode || mode === "fixTee"; $("#hintText", s).textContent = mode ? HINTS[mode] : "";   // Fix tees explains itself in the sheet
     $("#presets", s).hidden = mode !== "pin";
-    if (mode === "pin" || mode === "green") setView("green"); else drawAll();
+    if (mode === "pin" || mode === "green") setView("green");
+    else if (mode === "fixTee") { drawAll(); map.invalidateSize({ animate: false }); map.setView(teePoint(course, n, fixSel), 19); }   // the taller sheet shrinks the map
+    else drawAll();
     if (mode === "pin") drawPresets();
   }
-  $("#hintDone", s).onclick = () => { if (tapMode === "trace") finishTrace(); else { setTap(null); if (view === "green") setView("hole"); } };
+  $("#hintDone", s).onclick = () => { if (tapMode === "trace") finishTrace(); else if (tapMode === "fixTee") holeView({ ...ctx, fixTee: null }); else { setTap(null); if (view === "green") setView("hole"); } };
   function onTap(p) {
     if (!tapMode) return;
     if (tapMode === "pin") { setPin(p); drawAll(); return; }
@@ -391,6 +474,7 @@ async function holeView(ctx) {
     if (tapMode === "ball") { addBall(p, "tap"); setTap(null); return; }
     if (tapMode === "green") { addBall(p, "tap", true); setTap(null); askPutts(); return; }
     if (tapMode === "trace") { trace.push(p); drawAll(); return; }
+    if (tapMode === "fixTee") { setTeeFix(fixSel, p); return; }
   }
 
   // ---- pins
@@ -517,14 +601,50 @@ async function holeView(ctx) {
   $("#menu", s).onclick = () => {
     const md = modal(`<h3 style="margin:0">Hole ${n}</h3><div class="list">
       <div class="item" id="mh"><div class="grow">Hazards and avoid zones</div><span>›</span></div>
+      <div class="item" id="mt"><div class="grow">Fix tees</div>${course.teeOrder.some(t => teeCheck(course, n, t).flagged) ? '<span class="pill yellow">⚑</span>' : ""}<span>›</span></div>
       ${ctx.mode === "round" ? '<div class="item" id="ms"><div class="grow">Round summary</div><span>›</span></div>' : ""}
       ${ctx.mode === "plan" ? '<div class="item" id="mp"><div class="grow">Plan summary</div><span>›</span></div>' : ""}
       <div class="item" id="mc"><div class="grow">Course page</div><span>›</span></div></div>`);
     $("#mh", md).onclick = () => { md.remove(); hazardMenu(); };
+    $("#mt", md).onclick = () => { md.remove(); setTap("fixTee"); };
     if ($("#ms", md)) $("#ms", md).onclick = () => { md.remove(); roundSummary(round.id); };
     if ($("#mp", md)) $("#mp", md).onclick = () => { md.remove(); planSummary(plan.id); };
     $("#mc", md).onclick = () => { md.remove(); coursePage(ctx.slug); };
   };
+
+  // ---- Fix tees: every tee set on this hole, labeled, draggable; a tap or press-and-hold places the selected one
+  const teeLoupe = dragLoupe(map, loupeBase);
+  function setTeeFix(t, p) {
+    const all = Store.teeFixes(ctx.slug); all[`${n}:${t}`] = [+p[0].toFixed(7), +p[1].toFixed(7)];
+    Store.saveTeeFixes(ctx.slug, all); fixSel = t; drawAll(false);
+  }
+  function drawTeeFix() {
+    course.teeOrder.forEach(t => {
+      const c = teeCheck(course, n, t), on = t === fixSel;
+      const icon = L.divIcon({ className: "", iconSize: [18, 18], iconAnchor: [9, 9],
+        html: `<div style="width:18px;height:18px;border-radius:4px;box-sizing:border-box;background:${on ? "#ffd27a" : "#fff"};border:${c.flagged ? "3px solid #ff4fd8" : "2px solid #16231a"}"></div>` });
+      L.marker(teePoint(course, n, t), { icon, draggable: true, zIndexOffset: on ? 900 : 700, autoPan: true }).addTo(top)
+        .bindTooltip(`${esc(t)} ${c.yd}${c.flagged ? ` ⚑ ${c.diff > 0 ? "+" : ""}${c.diff}` : ""}`, { permanent: true, direction: "right", offset: [10, 0], className: "lbl" })
+        .on("click", () => { fixSel = t; drawAll(false); })
+        .on("dragstart", () => { fixSel = t; })
+        .on("drag", e => teeLoupe.move(e.target.getLatLng()))
+        .on("dragend", e => { teeLoupe.end(); const ll = e.target.getLatLng(); setTeeFix(t, [ll.lat, ll.lng]); });
+    });
+  }
+  function fixTeeSheet(sh) {
+    const fixes = Store.teeFixes(ctx.slug);
+    sh.innerHTML = `<div class="muted">Fix tees on hole ${n}. Pick a tee, then drag its marker or tap where it belongs; press and hold to magnify. Saved on this phone as you go.</div>
+      <div class="list">${course.teeOrder.map(t => { const c = teeCheck(course, n, t); return `<div class="item" data-t="${esc(t)}" style="${t === fixSel ? "background:#fff7e0;" : ""}padding:8px 6px">
+        <div class="grow"><b>${esc(t)}</b><small>card ${c.card} · measures ${c.yd}${c.fixed ? " · moved by you" : ""}</small></div>
+        ${c.flagged ? `<span class="pill ${Math.abs(c.diff) > 20 ? "red" : "yellow"}">⚑ ${c.diff > 0 ? "+" : ""}${c.diff}</span>` : '<span class="pill ok">OK</span>'}
+        ${c.fixed ? `<button class="btn small alt" data-reset="${esc(t)}">Undo</button>` : ""}</div>`; }).join("")}</div>
+      <div class="row"><button class="btn" id="fixDone">Done</button></div>`;
+    sh.querySelectorAll("[data-t]").forEach(x => x.onclick = e => {
+      if (e.target.dataset.reset) { delete fixes[`${n}:${e.target.dataset.reset}`]; Store.saveTeeFixes(ctx.slug, fixes); drawAll(false); return; }
+      fixSel = x.dataset.t; map.panTo(teePoint(course, n, fixSel)); drawAll(false);
+    });
+    $("#fixDone", sh).onclick = () => holeView({ ...ctx, fixTee: null });
+  }
 
   // ---- draw everything
   function drawAll(redrawFeatures = true) {
@@ -532,7 +652,7 @@ async function holeView(ctx) {
     top.clearLayers();
     const pin = pinOrCenter(h, getPin());
     $("#pinLabel", s).textContent = pinMoved() ? "Pin: moved" : "Pin: center (default)";
-    L.marker(teeP, { icon: teeIcon, interactive: false, pane: "lines" }).addTo(top);
+    if (tapMode === "fixTee") drawTeeFix(); else L.marker(teeP, { icon: teeIcon, interactive: false, pane: "lines" }).addTo(top);
     const pm = L.marker(pin, { icon: pinIcon(pinMoved()), draggable: tapMode === "pin", zIndexOffset: 800 }).addTo(top);
     pm.on("dragend", e => { const ll = e.target.getLatLng(); setPin([ll.lat, ll.lng]); drawAll(false); });
     pm.on("click", () => { if (ctx.mode !== "round" || true) setTap(tapMode === "pin" ? null : "pin"); });
@@ -544,7 +664,7 @@ async function holeView(ctx) {
       L.polyline([teeP, ...planned, pin], { pane: "lines", color: "#ffd27a", weight: 2, dashArray: "6 7", interactive: false }).addTo(top);
       planKeys.forEach(k => { if (!P[k]?.p) return; L.marker(P[k].p, { icon: tgtIcon(k === "teeTarget" ? "T" : k === "layup" ? "L" : "A", true), draggable: ctx.mode === "plan", zIndexOffset: 600 }).addTo(top)
         .on("dragend", e => { if (ctx.mode !== "plan") return; const ll = e.target.getLatLng(); ph[k].p = [ll.lat, ll.lng]; if (!ph[k].clubSet) ph[k].club = clubFor(plays(ctx.slug, Geo.yd(planOrigin(k), ph[k].p))); persist(); drawAll(false); }); });
-    } else if (ctx.mode !== "round") {
+    } else if (ctx.mode !== "round" && tapMode !== "fixTee") {
       L.polyline(playLine(h, teeP, getPin()), { pane: "lines", color: "#fff", weight: 1.6, dashArray: "5 7", opacity: .85, interactive: false }).addTo(top);
     }
     // round: actual shots + GPS
@@ -578,6 +698,7 @@ async function holeView(ctx) {
   }
   function renderSheet() {
     const sh = $("#sheet", s); const pin = pinOrCenter(h, getPin()); let html = "";
+    if (tapMode === "fixTee") return fixTeeSheet(sh);
     if (ctx.mode === "browse") {
       html += yardBlock(teeP, `${tee} tee`);
       html += `<div class="hz">${hazardHTML(hazardRows(course, n, playLine(h, teeP, getPin())))}</div>${pinHazardsHTML(course, n, pin)}`;
@@ -652,6 +773,8 @@ async function holeView(ctx) {
   A.holeBearing = az(teeP, h.greenCenter);
   setBase(base); frame();
   if (map.setBearing) { map.setBearing(-A.holeBearing * (A.bearingSign || 1)); frame(); }
+  if ($("#teeFlag", s)) $("#teeFlag", s).onclick = () => { fixSel = tee; setTap("fixTee"); };
+  if (ctx.fixTee) setTap("fixTee");
 }
 
 // ---------------------------------------------------------------- plan summary, copy, switch tees

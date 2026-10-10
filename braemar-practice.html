@@ -394,7 +394,7 @@ function finishShot(ll) {
   clearTimeout(finishShot.t);
   finishShot.t = setTimeout(() => { box.hidden = true; setView("shot"); }, 2500);
 }
-const fmtFt = ft => ft < 10 ? `${ft.toFixed(1)} ft` : `${Math.round(ft)} ft`;
+const fmtFt = ft => `${Math.round(ft)} ft`;   // nearest foot, same as on the green in the app
 
 // ---------- readout, hint, buttons ----------
 function readout() {

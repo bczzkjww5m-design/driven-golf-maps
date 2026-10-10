@@ -51,6 +51,8 @@ function usgaYd(h, p) {
   return Geo.length(pts) * YD;
 }
 const pinOrCenter = (h, pin) => pin || h.greenCenter;
+const FT = 3.28084;
+const ftTo = (a, b) => Math.round(Geo.m(a, b) * FT);   // feet, nearest foot (on the green)
 // line of play from a spot to the pin: through planned targets still ahead; with no plan, the USGA way (the same rule
 // that set the scorecard markers): straight to the pin, bending only at the hole's pivot when it's ahead of you, well
 // short of the pin, and the hole really bends there (more than ~10 yd off the straight line)
@@ -529,7 +531,7 @@ async function holeView(ctx) {
   function measureFrom() {
     if (ctx.mode !== "round") return teeP;
     if (!rh.shots?.length) return teeToday();
-    return gpsNear() ? A.gps.p : ballSpot();
+    return gpsNear() && !rh.shots.at(-1).onGreen ? A.gps.p : ballSpot();   // a ball placed on the green beats GPS
   }
   function approachFrom() {
     const P = ph || (roundPlan ? roundPlan.holes[n] : null);
@@ -584,9 +586,20 @@ async function holeView(ctx) {
     sh.push({ p, club: null, src, onGreen });
     rh.nextClub = null; persist(); drawAll();
   }
+  // putting is in feet: first putt = my ball on the green to the pin; leave = where the first putt finished
+  const firstPuttFt = () => { const b = rh.shots?.at(-1); return b?.onGreen ? ftTo(b.p, pinOrCenter(h, getPin())) : null; };
   function askPutts() {
-    const md = modal(`<h3 style="margin:0">Putts on hole ${n}</h3><div class="chips" id="pc"></div>`);
-    [0, 1, 2, 3, 4].forEach(k => { const c = el(`<button class="chip">${k}</button>`); c.onclick = () => { rh.putts = k; rh.score = scoreOf(); persist(); md.remove(); drawAll(); }; $("#pc", md).appendChild(c); });
+    const fp = firstPuttFt();
+    const md = modal(`<h3 style="margin:0">Putts on hole ${n}</h3>${fp != null ? `<p class="muted">First putt: <b>${fp} ft</b></p>` : ""}<div class="chips" id="pc"></div>`);
+    [0, 1, 2, 3, 4].forEach(k => { const c = el(`<button class="chip">${k}</button>`); c.onclick = () => {
+      rh.putts = k; rh.firstPuttFt = k ? fp : null; rh.leaveFt = k === 1 ? 0 : null; rh.score = scoreOf(); persist(); md.remove(); drawAll();
+      if (k >= 2) askLeave(); }; $("#pc", md).appendChild(c); });
+  }
+  function askLeave() {
+    const md = modal(`<h3 style="margin:0">Where did your first putt finish?</h3><p class="muted">Feet from the hole</p><div class="chips" id="lc"></div><button class="btn alt" id="sk">Skip</button>`);
+    [1, 2, 3, 4, 5, 6, 8, 10, 15, 20].forEach(ft => { const c = el(`<button class="chip">${ft}${ft === 20 ? "+" : ""} ft</button>`);
+      c.onclick = () => { rh.leaveFt = ft; persist(); md.remove(); drawAll(false); }; $("#lc", md).appendChild(c); });
+    $("#sk", md).onclick = () => md.remove();
   }
   const scoreOf = () => { const sh = rh.shots || []; const strokes = Math.max(0, sh.length - 1) || (sh.length ? 1 : 0); return strokes + (rh.putts || 0) + (rh.penalties || 0); };
 
@@ -683,7 +696,8 @@ async function holeView(ctx) {
     if (redrawFeatures) { if (featLayer) featLayer.remove(); featLayer = drawFeatures(map, holeFeatures(course, n), base, { selected: selectedHz }).addTo(map); }
     top.clearLayers();
     const pin = pinOrCenter(h, getPin());
-    $("#pinLabel", s).textContent = pinMoved() ? "Pin: moved" : "Pin: center (default)";
+    const ballOnGreen = ctx.mode === "round" && rh.shots?.length && Geo.inRing(measureFrom(), h.green);
+    $("#pinLabel", s).textContent = ballOnGreen ? `Pin: ${ftTo(measureFrom(), pin)} ft` : pinMoved() ? "Pin: moved" : "Pin: center (default)";
     L.marker(teeP, { icon: teeIcon, interactive: false, keyboard: false }).addTo(top);   // marker pane: placed and drawn upright on the turned map
     const pm = L.marker(pin, { icon: pinIcon(pinMoved()), draggable: tapMode === "pin", zIndexOffset: 800 }).addTo(top);
     pm.on("drag", e => pinLoupe.move(e.target.getLatLng()));
@@ -703,7 +717,13 @@ async function holeView(ctx) {
     // round: actual shots + GPS
     if (rh?.shots?.length) {
       L.polyline(rh.shots.map(x => x.p), { pane: "lines", color: "#fff", weight: 2.5, interactive: false }).addTo(top);
-      rh.shots.slice(1).forEach((x, i) => L.marker(x.p, { icon: ballIcon, interactive: false }).addTo(top).bindTooltip(`${i + 1}`, { permanent: true, direction: "right", className: "lbl" }));
+      rh.shots.slice(1).forEach((x, i) => {
+        const last = i === rh.shots.length - 2 && x.onGreen;      // my ball on the green: drag it into place (GPS is only good to a few yards)
+        const mk = L.marker(x.p, { icon: ballIcon, interactive: last, draggable: last, zIndexOffset: last ? 850 : 0 }).addTo(top)
+          .bindTooltip(`${i + 1}`, { permanent: true, direction: "right", className: "lbl" });
+        if (last) mk.on("drag", e => pinLoupe.move(e.target.getLatLng())).on("dragend", e => { pinLoupe.end(); const ll = e.target.getLatLng();
+          x.p = [ll.lat, ll.lng]; x.src = "drag"; if (rh.putts) rh.firstPuttFt = firstPuttFt(); persist(); drawAll(false); });
+      });
     }
     if (A.gps && ctx.mode === "round") {
       L.circle(A.gps.p, { radius: A.gps.acc / YD, color: "#2a7de1", weight: 1, fillOpacity: .12, interactive: false }).addTo(top);
@@ -714,8 +734,14 @@ async function holeView(ctx) {
   }
 
   // ---- bottom sheet
-  function yardBlock(from, label, targets = []) {
+  function yardBlock(from, label, targets = [], fromGPS = false) {
     const pin = pinOrCenter(h, getPin());
+    // my ball is on the green (inside the outline, not the fringe): everything in feet
+    if (ctx.mode === "round" && Geo.inRing(from, h.green)) {
+      const ft = ftTo(from, pin);
+      return `<div class="yards"><b>${ft}<span class="unit"> ft</span></b><div><div class="muted">Pin: ${ft} ft · ${esc(label)}${pinMoved() ? "" : " (pin at center)"}</div>
+        ${fromGPS ? '<div class="warn">GPS is only good to a few yards on the green. Tap "On green" to place your ball, then drag it into place.</div>' : ""}</div></div>`;
+    }
     const line = playLine(h, from, getPin(), targets);
     const total = Geo.length(line) * YD;
     // front/center/back are measured along the last leg into the green, from the last point well short of it
@@ -749,8 +775,10 @@ async function holeView(ctx) {
   }
   function renderSheet() {
     const sh = $("#sheet", s); const pin = pinOrCenter(h, getPin()); let html = "";
-    const hzRows = hazardPanel(course, n, panelLine()); hzLabels(hzRows);
-    const hzHTML = panelHTML(hzRows, ctx.slug, hzOpen) + pinHazardsHTML(course, n, pin);
+    // ball on the green: putting in feet, so the yardage hazard panel and its labels step aside
+    const greenMode = ctx.mode === "round" && rh.shots?.length && Geo.inRing(measureFrom(), h.green);
+    const hzRows = greenMode ? [] : hazardPanel(course, n, panelLine()); hzLabels(hzRows);
+    const hzHTML = greenMode ? "" : panelHTML(hzRows, ctx.slug, hzOpen) + pinHazardsHTML(course, n, pin);
     $("#ydHead", s).textContent = onTeeGPS() ? `par ${h.par} · plays ${playsToday()} today (card ${card})` : `par ${h.par} · ${card} yd`;
     if (ctx.mode === "browse") {
       html += yardBlock(teeP, `${tee} tee`);
@@ -778,11 +806,11 @@ async function holeView(ctx) {
     } else {
       // on the tee (no shots yet): today's tee = your GPS spot when you're on the tee box, else the course marker
       const onTee = !rh.shots?.length, gpsTee = onTeeGPS();
-      const fromGPS = !onTee && gpsNear(); const from = onTee ? teeToday() : fromGPS ? A.gps.p : ballSpot();
+      const fromGPS = !onTee && gpsNear() && !rh.shots.at(-1).onGreen; const from = onTee ? teeToday() : fromGPS ? A.gps.p : ballSpot();
       const label = onTee ? (gpsTee ? `${tee} tee · your spot (GPS ±${Math.round(A.gps.acc)} yd)` : `${tee} tee`)
         : fromGPS ? `You (GPS ±${Math.round(A.gps.acc)} yd)` : rh.shots?.length > 1 ? "Your ball" : `${tee} tee`;
       const P = roundPlan?.holes[n];
-      html += yardBlock(from, label, P ? planKeys.map(k => P[k]?.p) : []);
+      html += yardBlock(from, label, P ? planKeys.map(k => P[k]?.p) : [], fromGPS);
       if (gpsTee) html += `<div class="today">Plays <b>${playsToday()}</b> today (card ${card})</div>`;
       html += hzHTML;
       // plan on the tee: targets stay where you planned them; distances come from today's tee, and the first club is
@@ -808,9 +836,10 @@ async function holeView(ctx) {
       if (planClub && rh.clubFor !== nsh && !rh.nextClub) { rh.nextClub = planClub; rh.clubFor = nsh; }
       html += `<div class="muted">Shot ${nextNo} club${repick && nsh === 0 ? ` (plan: ${esc(repick.from)} → ${esc(repick.to)} today)` : P && planKeys[nsh] && P[planKeys[nsh]]?.club ? ` (plan: ${esc(P[planKeys[nsh]].club)})` : ""}</div><div class="chips" id="clubs">${A.settings.bag.map(([c]) => `<button class="chip${rh.nextClub === c ? " on" : ""}" data-club="${esc(c)}">${esc(c)}</button>`).join("")}<button class="chip${rh.nextClub === "Putter" ? " on" : ""}" data-club="Putter">Putter</button></div>
         <div class="row"><button class="btn" id="atBall">I'm at my ball</button><button class="btn alt" id="tapBall">Tap ball</button></div>
+        ${rh.shots?.at(-1)?.onGreen && rh.putts == null ? '<div class="row"><button class="btn" id="logPutts">Log putts</button></div>' : ""}
         <div class="row"><button class="btn alt" id="onGreen">On green</button><button class="btn alt" id="pen">Penalty +1${rh.penalties ? ` (${rh.penalties})` : ""}</button><button class="btn alt" id="undo">Undo</button></div>
         <div class="row"><button class="btn alt small" id="live">${A.gpsWatch !== null ? "Live GPS on" : "Turn on live GPS"}</button><button class="btn alt small" id="movePin">${tapMode === "pin" ? "Done moving pin" : "Move pin"}</button></div>
-        <div style="display:flex;gap:10px;align-items:center"><span class="muted">Score</span><b class="num" style="font-size:22px">${rh.score ?? "–"}</b><span class="muted">${rh.putts != null ? `${rh.putts} putts` : ""}</span>
+        <div style="display:flex;gap:10px;align-items:center"><span class="muted">Score</span><b class="num" style="font-size:22px">${rh.score ?? "–"}</b><span class="muted">${rh.putts != null ? `${rh.putts} putts${rh.firstPuttFt != null ? ` · first ${rh.firstPuttFt} ft${rh.leaveFt ? `, left ${rh.leaveFt} ft` : ""}` : ""}` : ""}</span>
         <button class="btn small alt" id="sm">−</button><button class="btn small alt" id="sp">+</button></div>
         <div class="row"><button class="btn alt" id="pv">‹ Hole ${n > 1 ? n - 1 : NH}</button>${n < NH ? `<button class="btn" id="nx">Hole ${n + 1} ›</button>` : `<button class="btn" id="sum">Finish round</button>`}</div>`;
     }
@@ -834,7 +863,12 @@ async function holeView(ctx) {
       sh.querySelectorAll("[data-club]").forEach(x => x.onclick = () => { rh.nextClub = rh.nextClub === x.dataset.club ? null : x.dataset.club; persist(); renderSheet(); });
       on("atBall", () => bestFix((p, acc) => { addBall(p, "gps"); toast(`Ball marked (GPS ±${Math.round(acc)} yd). Drag-free: tap "Tap ball" to fix it.`); }));
       on("tapBall", () => setTap("ball"));
-      on("onGreen", () => setTap("green"));
+      on("onGreen", () => {
+        // GPS on the green is a starting point only: drop the ball there, then drag it into place and log putts
+        if (gpsNear() && Geo.inRing(A.gps.p, h.green)) { addBall(A.gps.p, "gps", true); setView("green"); toast("Ball placed at your GPS spot. Drag it into place, then log putts.", 3500); }
+        else setTap("green");
+      });
+      on("logPutts", askPutts);
       on("pen", () => { rh.penalties = (rh.penalties || 0) + 1; rh.score = scoreOf(); persist(); renderSheet(); });
       on("undo", () => { if (rh.shots?.length > 1) { rh.shots.pop(); if (rh.shots.length === 1) rh.shots = []; rh.score = scoreOf(); persist(); drawAll(false); } });
       on("live", () => { if (A.gpsWatch !== null) { navigator.geolocation.clearWatch(A.gpsWatch); A.gpsWatch = null; A.gps = null; drawAll(false); } else startGPS(); });
@@ -897,6 +931,7 @@ async function roundSummary(id) {
   const NAME = { teeTarget: "Tee shot", layup: "Layup", approach: "Approach" };
   const inHazard = (p, n) => hazards(course, n).filter(f => f.properties.kind !== "trees" && f.properties.kind !== "ob_line" && f.properties.kind !== "fence" && Geo.inside(p, f.geometry));
   let tot = 0, ptot = 0, teeN = 0, teeIn = 0, apN = 0, apGood = 0, found = [], plannedHz = 0; const drift = []; let rows = "";
+  const first = [], leave = [];                                  // putting, in feet
   course.holes.forEach(h => {
     const rh = r.holes[h.n] || {}, ph = plan?.holes[h.n] || {}; const sh = rh.shots || [];
     tot += rh.score || 0; if (rh.score) ptot += ph.score || h.par;
@@ -922,6 +957,8 @@ async function roundSummary(id) {
     }
     sh.slice(1).forEach(x => inHazard(x.p, h.n).forEach(f => { found.push(`${h.n}: ${hazardName(f)}`); detail.push(`<span class="pill yellow">ended in ${esc(hazardName(f))}</span>`); }));
     if (rh.penalties) detail.push(`<span class="pill red">${rh.penalties} penalty</span>`);
+    if (rh.putts != null) detail.push(`${rh.putts} putt${rh.putts === 1 ? "" : "s"}${rh.firstPuttFt != null ? ` · first ${rh.firstPuttFt} ft` : ""}${rh.leaveFt ? ` · left ${rh.leaveFt} ft` : ""}`);
+    if (rh.firstPuttFt != null) first.push(rh.firstPuttFt); if (rh.leaveFt != null && rh.putts >= 2) leave.push(rh.leaveFt);
     const pinMovedVsPlan = plan && ((ph.pin && !rh.pin) || (!ph.pin && rh.pin) || (ph.pin && rh.pin && Geo.yd(ph.pin, rh.pin) > 1));
     if (pinMovedVsPlan) detail.push(`<span class="pill blue">pin moved from plan</span>`);
     if (plan && rh.score) drift.push({ n: h.n, v: (miss.length ? miss.reduce((a, c) => a + c, 0) / miss.length : 0) + 10 * Math.abs((rh.score || 0) - (ph.score || h.par)) });
@@ -932,6 +969,8 @@ async function roundSummary(id) {
   const card = el(`<div class="card"><h3>${esc(meta(r.course).name)} · ${new Date(r.date).toLocaleDateString()}</h3>
     <div class="muted">${esc(r.tees)} tees${Object.values(r.holes).some(x => x.tee) ? " (some holes played from other tees)" : ""}${plan ? ` · plan: ${esc(plan.name)}` : ""}</div>
     <div class="stat"><div><b>${tot || "–"}</b><span>score${plan ? ` vs ${ptot} planned on the holes played` : ""}</span></div>
+    ${first.length ? `<div><b>${Math.round(first.reduce((a, c) => a + c, 0) / first.length)} ft</b><span>average first putt (${first.length} hole${first.length === 1 ? "" : "s"})</span></div>` : ""}
+    ${leave.length ? `<div><b>${Math.round(leave.reduce((a, c) => a + c, 0) / leave.length)} ft</b><span>average first-putt leave</span></div>` : ""}
     ${plan ? `<div><b>${pct(teeIn, teeN)}</b><span>tee shots within 15 yd of target (${teeIn}/${teeN})</span></div>
     <div><b>${pct(apGood, apN)}</b><span>approaches on the planned side (${apGood}/${apN})</span></div>
     <div><b>${found.length}</b><span>hazards found vs ${plannedHz} warned about in the plan</span></div>

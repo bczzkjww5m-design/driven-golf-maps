@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Map great28 by hand</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  :root {
+    --turf: #1f4d2b; --turf-2: #2d6b3c; --chalk: #f7f6f0; --chalk-2: #e3e6dc; --ink: #16231a;
+    --flag: #d6452f; --muted: #5c6b60;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  html, body { height: 100%; margin: 0; background: var(--turf); color: var(--ink); }
+  body { display: flex; flex-direction: column; -webkit-user-select: none; user-select: none; }
+  body > * { min-width: 0; }   /* stops the long hole strip from widening the page */
+  header { background: var(--turf); color: var(--chalk); padding: calc(env(safe-area-inset-top, 0px) + 8px) 16px 8px; }
+  header h1 { font-size: 16px; margin: 0 0 6px; }
+  #holes { display: flex; gap: 4px; overflow-x: auto; padding-bottom: 2px; }
+  #holes button { all: unset; flex: 0 0 auto; min-width: 30px; text-align: center; padding: 6px 4px; border-radius: 7px;
+                  background: #ffffff22; font: 600 13px system-ui; cursor: pointer; position: relative; }
+  #holes button.on { background: var(--chalk); color: var(--turf); }
+  #holes button.done::after { content: ""; position: absolute; top: 2px; right: 2px; width: 6px; height: 6px; border-radius: 50%; background: #7ee08a; }
+  main { flex: 1; position: relative; min-height: 0; }
+  #map { position: absolute; inset: 0; background: #a9d48a; }
+  #hint { position: absolute; z-index: 500; left: 50%; transform: translateX(-50%); top: 10px; background: #16231ae6; color: var(--chalk);
+          padding: 8px 12px; border-radius: 10px; font: 600 13px system-ui; max-width: calc(100% - 32px); text-align: center; }
+  .panel { background: var(--chalk); padding: 10px 16px calc(env(safe-area-inset-bottom, 0px) + 10px); display: flex; flex-direction: column; gap: 8px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .stat { font: 600 15px system-ui; } .muted { color: var(--muted); font-size: 13px; }
+  button.b { font: 600 14px system-ui; border: 0; border-radius: 9px; padding: 10px 12px; cursor: pointer; background: var(--turf-2); color: var(--chalk); }
+  button.b.alt { background: var(--chalk-2); color: var(--ink); }
+  button.b.on { background: var(--flag); color: #fff; }
+  .chip { font: 600 13px system-ui; border: 1.5px solid var(--chalk-2); background: #fff; border-radius: 999px; padding: 6px 12px; cursor: pointer; color: var(--ink); }
+  .chip.on { background: var(--turf-2); color: var(--chalk); border-color: var(--turf-2); }
+  .mk { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 1px 4px #0008; display: grid; place-items: center;
+        font: 700 11px system-ui; color: #fff; box-sizing: border-box; }
+  .mk.tee { background: #1d4fa8; border-radius: 4px; } .mk.green { background: var(--flag); } .mk.bend { background: #e0a800; width: 16px; height: 16px; }
+  #sheet { position: fixed; inset: 0; z-index: 3000; background: #0008; display: flex; align-items: flex-end; }
+  #sheet > div { background: var(--chalk); width: 100%; padding: 16px 16px calc(env(safe-area-inset-bottom, 0px) + 16px); border-radius: 16px 16px 0 0; display: flex; flex-direction: column; gap: 10px; }
+  textarea { font: 12px ui-monospace, monospace; height: 120px; width: 100%; box-sizing: border-box; -webkit-user-select: text; user-select: text; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Map a course by hand · great28</h1>
+  <div id="holes"></div>
+</header>
+<main><div id="map"></div><div id="hint"></div></main>
+<div class="panel">
+  <div class="row"><span class="stat" id="info"></span></div>
+  <div class="row"><span class="muted">Par</span><span id="pars"></span></div>
+  <div class="row">
+    <button class="b alt" id="bend">Add bend</button>
+    <button class="b alt" id="clear">Clear hole</button>
+    <button class="b" id="next">Next hole</button>
+    <button class="b alt" id="export">Export</button>
+  </div>
+</div>
+<script>
+const SLUG = "great28", HOLES = 9, BOUNDS = [[35.666824676889085, -106.07526055776863], [35.675573824332595, -106.06454088162162]], KEY = "handmap-" + SLUG;
+const YD = 1.09361;
+let state = { slug: SLUG, holes: {} };
+try { const s = JSON.parse(localStorage.getItem(KEY) || "null"); if (s && s.holes) state = s; } catch {}
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {} };
+let cur = 1, bendMode = false;
+const hole = n => state.holes[n] || (state.holes[n] = { tee: null, green: null, bends: [], par: null });
+const r7 = v => Math.round(v * 1e7) / 1e7;
+
+const map = L.map("map", { zoomControl: false, maxZoom: 21, zoomSnap: 0.25, doubleClickZoom: false });
+map.attributionControl.setPrefix("").addAttribution("Imagery: USDA NAIP 2022");
+// Aerial photo gets its own pane under the overlay pane, so lines and markers always draw above it
+map.createPane("aerialPane").style.zIndex = 300;
+L.imageOverlay("great28.jpg", BOUNDS, { interactive: false, pane: "aerialPane" }).addTo(map);
+map.fitBounds(BOUNDS);
+const drawn = L.layerGroup().addTo(map);
+
+const icon = (cls, txt) => L.divIcon({ className: "", iconSize: [22, 22], iconAnchor: [11, 11], html: `<div class="mk ${cls}">${txt}</div>` });
+const pathOf = h => h.tee && h.green ? [h.tee, ...h.bends, h.green] : [];
+const lengthYd = pts => { let m = 0; for (let i = 1; i < pts.length; i++) m += L.latLng(pts[i - 1]).distanceTo(pts[i]); return Math.round(m * YD); };
+const guessPar = yd => yd < 250 ? 3 : yd < 470 ? 4 : 5;
+// bends are kept in order from tee to green: a new one goes where it adds the least length
+function insertBend(h, p) {
+  const pts = [h.tee, ...h.bends, h.green]; let best = 0, bestAdd = Infinity;
+  for (let i = 1; i < pts.length; i++) {
+    const add = L.latLng(pts[i - 1]).distanceTo(p) + L.latLng(p).distanceTo(pts[i]) - L.latLng(pts[i - 1]).distanceTo(pts[i]);
+    if (add < bestAdd) { bestAdd = add; best = i - 1; }
+  }
+  h.bends.splice(best, 0, p);
+}
+
+function draw() {
+  drawn.clearLayers();
+  for (let n = 1; n <= HOLES; n++) {
+    const h = state.holes[n]; if (!h) continue;
+    const pts = pathOf(h), on = n === cur;
+    if (pts.length) L.polyline(pts, { color: on ? "#ffd27a" : "#ffffff", weight: on ? 3 : 2, opacity: on ? 1 : .7, dashArray: on ? null : "6 6", interactive: false }).addTo(drawn);
+    if (!on) {
+      if (h.green) L.marker(h.green, { icon: icon("green", n), interactive: true }).on("click", () => pick(n)).addTo(drawn);
+      else if (h.tee) L.marker(h.tee, { icon: icon("tee", n), interactive: true }).on("click", () => pick(n)).addTo(drawn);
+      continue;
+    }
+    const drag = (get, set) => e => { const ll = e.target.getLatLng(); set([r7(ll.lat), r7(ll.lng)]); save(); draw(); };
+    if (h.tee) L.marker(h.tee, { icon: icon("tee", "T"), draggable: true }).on("dragend", drag(null, p => h.tee = p)).addTo(drawn);
+    h.bends.forEach((b, i) => L.marker(b, { icon: icon("bend", ""), draggable: true })
+      .on("dragend", drag(null, p => h.bends[i] = p))
+      .on("click", () => { h.bends.splice(i, 1); save(); draw(); }).addTo(drawn));
+    if (h.green) L.marker(h.green, { icon: icon("green", n), draggable: true }).on("dragend", drag(null, p => h.green = p)).addTo(drawn);
+  }
+  panel();
+}
+
+function panel() {
+  const h = hole(cur), pts = pathOf(h), yd = pts.length ? lengthYd(pts) : null;
+  const par = h.par || (yd ? guessPar(yd) : null);
+  document.getElementById("info").textContent = `Hole ${cur}` + (yd ? ` · ${yd} yd tee to green · par ${par}${h.par ? "" : " (guess)"}` : "");
+  const hint = bendMode ? "Tap a point on the line of play where the hole bends (a dogleg)."
+    : !h.tee ? `Hole ${cur}: tap the back tee box.`
+    : !h.green ? `Hole ${cur}: now tap the middle of the green.`
+    : "Drag any marker to fix it. Tap a yellow bend to remove it. Then press Next hole.";
+  document.getElementById("hint").textContent = hint;
+  const pars = document.getElementById("pars"); pars.innerHTML = "";
+  [3, 4, 5].forEach(p => { const c = document.createElement("button"); c.className = "chip" + (par === p ? " on" : ""); c.textContent = p;
+    c.onclick = () => { h.par = p; save(); panel(); }; pars.appendChild(c); });
+  document.getElementById("bend").classList.toggle("on", bendMode);
+  document.getElementById("bend").disabled = !(h.tee && h.green);
+  const hb = document.getElementById("holes"); hb.innerHTML = "";
+  for (let n = 1; n <= HOLES; n++) {
+    const b = document.createElement("button"), x = state.holes[n];
+    b.textContent = n; b.className = (n === cur ? "on " : "") + (x && x.tee && x.green ? "done" : "");
+    b.onclick = () => pick(n); hb.appendChild(b);
+    if (n === cur) setTimeout(() => b.scrollIntoView({ inline: "center", block: "nearest" }), 0);
+  }
+}
+
+function pick(n) { cur = n; bendMode = false; const pts = pathOf(hole(n));
+  if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.25), { maxZoom: 19 }); draw(); }
+
+map.on("click", e => {
+  const h = hole(cur), p = [r7(e.latlng.lat), r7(e.latlng.lng)];
+  if (bendMode) { insertBend(h, p); bendMode = false; }
+  else if (!h.tee) h.tee = p;
+  else if (!h.green) h.green = p;
+  else return;
+  save(); draw();
+});
+document.getElementById("bend").onclick = () => { bendMode = !bendMode; panel(); };
+document.getElementById("clear").onclick = () => { if (confirm(`Clear hole ${cur}?`)) { delete state.holes[cur]; save(); draw(); } };
+document.getElementById("next").onclick = () => pick(cur % HOLES + 1);
+
+function exportData() {
+  const holes = [];
+  for (let n = 1; n <= HOLES; n++) {
+    const h = state.holes[n]; if (!h || !h.tee || !h.green) continue;
+    const yd = lengthYd(pathOf(h));
+    holes.push({ n, tee: h.tee, bends: h.bends, green: h.green, par: h.par || guessPar(yd), yards: yd });
+  }
+  return { slug: SLUG, holes_total: HOLES, holes };
+}
+document.getElementById("export").onclick = () => {
+  const data = exportData(), text = JSON.stringify(data, null, 1);
+  const missing = HOLES - data.holes.length;
+  const sh = document.createElement("div"); sh.id = "sheet";
+  sh.innerHTML = `<div><b>${data.holes.length} of ${HOLES} holes mapped</b>${missing ? `<span class="muted">${missing} still need a tee and green. You can export now and finish later.</span>` : ""}
+    <div class="row"><button class="b" id="dl">Download file</button><button class="b alt" id="cp">Copy text</button><button class="b alt" id="im">Load a file…</button><button class="b alt" id="cl">Close</button></div>
+    <textarea readonly></textarea><input type="file" accept=".json,application/json" hidden></div>`;
+  sh.querySelector("textarea").value = text;
+  sh.querySelector("#dl").onclick = () => { const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([text], { type: "application/json" })); a.download = `${SLUG}_handmap.json`; a.click(); };
+  sh.querySelector("#cp").onclick = async e => { try { await navigator.clipboard.writeText(text); e.target.textContent = "Copied"; }
+    catch { const t = sh.querySelector("textarea"); t.select(); document.execCommand("copy"); e.target.textContent = "Copied"; } };
+  // load a file exported earlier (e.g. to carry on from another device)
+  const inp = sh.querySelector("input");
+  sh.querySelector("#im").onclick = () => inp.click();
+  inp.onchange = async () => { try { const d = JSON.parse(await inp.files[0].text());
+      state = { slug: SLUG, holes: {} }; d.holes.forEach(h => state.holes[h.n] = { tee: h.tee, green: h.green, bends: h.bends || [], par: h.par });
+      save(); sh.remove(); pick(1); } catch { alert("That file couldn't be read."); } };
+  sh.querySelector("#cl").onclick = () => sh.remove();
+  sh.onclick = e => { if (e.target === sh) sh.remove(); };
+  document.body.appendChild(sh);
+};
+pick(1);
+</script>
+</body>
+</html>

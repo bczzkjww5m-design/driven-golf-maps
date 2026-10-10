@@ -76,7 +76,9 @@ const illustrated = L.geoJSON(BASEMAP, {
 }).addTo(map);
 const holeLine = L.geoJSON(BASEMAP, { filter: f => f.properties.kind === "hole",
   style: { color: "#fff", weight: 2, dashArray: "6 6" }, interactive: false }).addTo(map);
-const aerial = L.imageOverlay(AERIAL, BOUNDS, { interactive: false });
+// Aerial photo gets its own pane under the overlay pane, so map shapes, pins and lines always draw above it
+map.createPane("aerialPane").style.zIndex = 300;
+const aerial = L.imageOverlay(AERIAL, BOUNDS, { interactive: false, pane: "aerialPane" });
 map.fitBounds(BOUNDS);
 
 // Layer toggle

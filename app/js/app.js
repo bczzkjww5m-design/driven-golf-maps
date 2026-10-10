@@ -8,6 +8,11 @@ const A = { index: [], courses: {}, settings: Store.settings(), gps: null, gpsWa
 
 // ---------------------------------------------------------------- data
 async function loadIndex() { A.index = await (await fetch("data/index.json")).json(); }
+// green slopes (lidar), loaded when first needed; null if a course has none
+async function loadSlopes(slug) {
+  if (!(slug in (A.slopes = A.slopes || {}))) { try { const r = await fetch(`data/${slug}/slopes.json`); A.slopes[slug] = r.ok ? await r.json() : null; } catch { A.slopes[slug] = null; } }
+  return A.slopes[slug];
+}
 async function loadCourse(slug) {
   if (!A.courses[slug]) A.courses[slug] = await (await fetch(`data/${slug}.json`)).json();
   return A.courses[slug];
@@ -453,6 +458,7 @@ async function holeView(ctx) {
       <div class="fl seg" style="top:10px;left:10px"><button data-v="hole" class="on">Hole</button><button data-v="green">Green</button></div>
       <div class="fl seg" style="top:10px;right:10px"><button data-b="map">Map</button><button data-b="aerial">Aerial</button></div>
       <button class="fl floatbtn" id="reset" style="top:50px;left:10px">Reset</button>
+      <button class="fl floatbtn" id="slopesBtn" style="top:90px;left:10px" hidden>Slopes</button>
       <div class="fl pinlabel" id="pinLabel" style="top:50px;right:10px"></div>
       <div class="fl presets" id="presets" hidden></div>
       <div class="fl hint" id="hint" hidden><span id="hintText"></span><button id="hintDone">Done</button></div>
@@ -474,6 +480,8 @@ async function holeView(ctx) {
   const aerial = L.imageOverlay(h.aerial.img, h.aerial.bounds, { pane: "aerial", interactive: false });
   let featLayer = null; const top = L.layerGroup().addTo(map);
   const hzLayer = L.layerGroup().addTo(map);               // front/middle/back labels on the hazards in play
+  const slopeLayer = L.layerGroup().addTo(map);            // green slopes (Green view, "Slopes" toggle)
+  let slopes = null; loadSlopes(ctx.slug).then(d => { slopes = d; drawAll(false); });
   let hzOpen = prefs.hzOpen !== false;
   const holeBounds = () => L.latLngBounds([teeP, h.greenCenter, ...h.path.slice(1, -1)]).pad(0.12);
   const greenBounds = () => L.latLngBounds(h.green).pad(0.35);
@@ -489,6 +497,7 @@ async function holeView(ctx) {
   s.querySelectorAll("[data-b]").forEach(x => x.onclick = () => setBase(x.dataset.b));
   s.querySelectorAll("[data-v]").forEach(x => x.onclick = () => setView(x.dataset.v));
   $("#reset", s).onclick = frame;
+  $("#slopesBtn", s).onclick = () => { prefs.slopes = !prefs.slopes; Store.set("viewPrefs", prefs); drawAll(false); };
   const loupeBase = () => L.imageOverlay(h.aerial.img, h.aerial.bounds);
   const wasHold = attachHold(map, loupeBase, ll => onTap(ll), () => !!tapMode);
   const pinLoupe = dragLoupe(map, loupeBase);
@@ -691,9 +700,55 @@ async function holeView(ctx) {
     $("#mc", md).onclick = () => { md.remove(); coursePage(ctx.slug); };
   };
 
+  // ---- green slopes: soft shading flat -> steep, downhill arrows, contours every 2 in, tiers / false fronts
+  // hidden if I hid it; greens whose lidar looks wrong start hidden until I choose to show them
+  const slopeHidden = () => { const v = Store.get("slopeHide:" + ctx.slug, {})[n]; return v === undefined ? !!slopes?.holes?.[n]?.suspect : v; };
+  const slopeHole = () => slopes?.holes?.[n] && !slopeHidden() ? slopes.holes[n] : null;
+  const bearingTo = (a, b2) => { const d = Geo.xy(b2, a); return (Math.atan2(d[0], d[1]) * 180 / Math.PI + 360) % 360; };
+  function slopeWords(down) {                              // as I see it, coming from where I'm playing from
+    const d = ((down - bearingTo(h.greenCenter, approachFrom()) + 540) % 360) - 180;
+    return Math.abs(d) <= 45 ? "back-to-front" : Math.abs(d) >= 135 ? "front-to-back" : d < 0 ? "left-to-right" : "right-to-left";
+  }
+  function pinSlope() {
+    const sh = slopeHole(); if (!sh) return null;
+    const pinP = pinOrCenter(h, getPin());
+    let best = null; sh.arrows.forEach(a => { const d = Geo.m(pinP, a); if (!best || d < best.d) best = { d, a }; });
+    if (!best || best.d > 4) return "No slope reading right at the pin (too close to the edge).";
+    const [, , down, pct] = best.a;
+    return pct < 0.75 ? "Pin on a flat spot (under 1%)." : `Pin on a ${slopeWords(down)} slope, about ${Math.max(1, Math.round(pct))}%.`;
+  }
+  function drawSlopes() {
+    slopeLayer.clearLayers();
+    const btn = $("#slopesBtn", s); btn.hidden = view !== "green" || !slopes?.holes?.[n]; btn.classList.toggle("on", !!prefs.slopes);
+    const sh = slopeHole(); if (!sh || view !== "green" || !prefs.slopes) return;
+    L.imageOverlay("data/" + sh.img, sh.bounds, { pane: "fills", interactive: false }).addTo(slopeLayer);
+    sh.contours.forEach(c => L.polyline(c, { pane: "hz", color: "#ffffff", weight: 0.6, opacity: 0.25, interactive: false }).addTo(slopeLayer));
+    const R = Math.PI / 180, at = (o, b2, m) => Geo.ll([Math.sin(b2 * R) * m, Math.cos(b2 * R) * m], o);
+    sh.arrows.filter(a => a[3] >= 0.75).forEach(([la, lo, down]) => {      // small arrows pointing downhill
+      const o = [la, lo], tip = at(o, down, 0.8), tail = at(o, down + 180, 0.8);
+      L.polyline([tail, tip], { pane: "hz", color: "#16231a", weight: 1.2, opacity: 0.4, interactive: false }).addTo(slopeLayer);
+      L.polyline([at(tip, down + 150, 0.45), tip, at(tip, down - 150, 0.45)], { pane: "hz", color: "#16231a", weight: 1.2, opacity: 0.4, interactive: false }).addTo(slopeLayer);
+    });
+    sh.steep.forEach(z => {
+      L.polygon(z.ring, { pane: "hz", color: "#8e1c14", weight: 1.2, opacity: 0.7, dashArray: "3 4", fill: false, interactive: false }).addTo(slopeLayer);
+      const c = [z.ring.reduce((a, q) => a + q[0], 0) / z.ring.length, z.ring.reduce((a, q) => a + q[1], 0) / z.ring.length];
+      L.marker(c, { interactive: false, keyboard: false, icon: L.divIcon({ className: "", iconSize: [0, 0], html: `<div class="slopelbl">${esc(z.label)}</div>` }) }).addTo(slopeLayer);
+    });
+  }
+  function slopeHTML() {
+    if (!slopes?.holes?.[n]) return "";
+    if (slopeHidden()) return `<div class="muted">${slopes.holes[n].suspect && Store.get("slopeHide:" + ctx.slug, {})[n] === undefined ? `Slopes hidden: ${esc(slopes.holes[n].suspect)}` : "Slopes hidden for this green."}
+      <button class="linkbtn" id="slopeShow">Show anyway</button></div>`;
+    const read = pinSlope();
+    const note = view === "green" && prefs.slopes ? `<div class="muted" style="font-size:12px">Estimated from public lidar (${esc(slopes.year)}). Greens can change; trust what you see. ${esc(slopes.credit)}.
+      <button class="linkbtn" id="slopeHide">Hide slopes for this green</button></div>` : "";
+    return `<div class="slope">${read ? `<b>${esc(read)}</b>` : ""}${note}</div>`;
+  }
+
   // ---- draw everything
   function drawAll(redrawFeatures = true) {
     if (redrawFeatures) { if (featLayer) featLayer.remove(); featLayer = drawFeatures(map, holeFeatures(course, n), base, { selected: selectedHz }).addTo(map); }
+    drawSlopes();
     top.clearLayers();
     const pin = pinOrCenter(h, getPin());
     const ballOnGreen = ctx.mode === "round" && rh.shots?.length && Geo.inRing(measureFrom(), h.green);
@@ -778,7 +833,7 @@ async function holeView(ctx) {
     // ball on the green: putting in feet, so the yardage hazard panel and its labels step aside
     const greenMode = ctx.mode === "round" && rh.shots?.length && Geo.inRing(measureFrom(), h.green);
     const hzRows = greenMode ? [] : hazardPanel(course, n, panelLine()); hzLabels(hzRows);
-    const hzHTML = greenMode ? "" : panelHTML(hzRows, ctx.slug, hzOpen) + pinHazardsHTML(course, n, pin);
+    const hzHTML = slopeHTML() + (greenMode ? "" : panelHTML(hzRows, ctx.slug, hzOpen) + pinHazardsHTML(course, n, pin));
     $("#ydHead", s).textContent = onTeeGPS() ? `par ${h.par} · plays ${playsToday()} today (card ${card})` : `par ${h.par} · ${card} yd`;
     if (ctx.mode === "browse") {
       html += yardBlock(teeP, `${tee} tee`);
@@ -847,6 +902,8 @@ async function holeView(ctx) {
     const on = (id, f) => { const x = $("#" + id, sh); if (x) x.onclick = f; };
     on("movePin", () => setTap(tapMode === "pin" ? null : "pin"));
     on("hzToggle", () => { hzOpen = !hzOpen; prefs.hzOpen = hzOpen; Store.set("viewPrefs", prefs); renderSheet(); });
+    const setHide = v => { const all = Store.get("slopeHide:" + ctx.slug, {}); all[n] = v; Store.set("slopeHide:" + ctx.slug, all); drawAll(false); };
+    on("slopeHide", () => setHide(true)); on("slopeShow", () => setHide(false));
     on("pv", () => holeView({ ...ctx, n: n > 1 ? n - 1 : NH }));
     on("nx", () => holeView({ ...ctx, n: n + 1 }));
     on("sum", () => ctx.mode === "plan" ? planSummary(plan.id) : roundSummary(round.id));

@@ -1,8 +1,10 @@
 [
   {"slug": "braemar", "name": "Braemar Golf Course", "course": "Championship 18", "city": "Edina, MN", "elevationFt": 840,
    "group": "18", "practice": "../braemar-practice.html"},
-  {"slug": "oakmarsh", "name": "Oak Marsh Golf Course", "course": "18 holes", "city": "Oakdale / Woodbury, MN", "elevationFt": 1034, "group": "18"},
-  {"slug": "rushcreek", "name": "Rush Creek Golf Club", "course": "Championship 18", "city": "Maple Grove, MN", "elevationFt": 942, "group": "18"},
+  {"slug": "oakmarsh", "name": "Oak Marsh Golf Course", "course": "18 holes", "city": "Oakdale / Woodbury, MN", "elevationFt": 1034, "group": "18",
+   "practice": "../oakmarsh-practice.html"},
+  {"slug": "rushcreek", "name": "Rush Creek Golf Club", "course": "Championship 18", "city": "Maple Grove, MN", "elevationFt": 942, "group": "18",
+   "practice": "../rushcreek-practice.html"},
   {"slug": "rushcreek-mac9", "name": "Rush Creek Golf Club", "course": "Mac 9 (short course)", "city": "Maple Grove, MN", "elevationFt": 942,
    "group": "Mac 9", "teeShots": "shortgame", "unconfirmedTees": true},
   {"slug": "santafe", "name": "Marty Sanchez Links de Santa Fe", "course": "Championship 18", "city": "Santa Fe, NM", "elevationFt": 6450, "group": "18"}

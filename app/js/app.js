@@ -75,26 +75,64 @@ function clubFor(yards) {
 const playsLikeOn = slug => { const e = meta(slug).elevationFt; return e != null && Math.abs(e - A.settings.homeElevationFt) >= 1000; };
 const plays = (slug, yd) => playsLikeOn(slug) ? Geo.playsLike(yd, meta(slug).elevationFt, A.settings.homeElevationFt) : yd;
 const playsTxt = (slug, yd) => playsLikeOn(slug) ? ` · plays like ~${plays(slug, yd)} (est.)` : "";
-function hazardRows(course, n, line) {
-  const rows = [];
-  hazards(course, n).forEach(f => {
-    if (f.properties.kind === "trees") return;
-    Geo.crossings(line, f.geometry, f.properties.kind === "bunker" ? 3 : 5).forEach(rc => rows.push({ f, ...rc }));
-  });
-  // trees: merge overlapping stretches from the many small tree outlines
-  const tr = hazards(course, n).filter(f => f.properties.kind === "trees").flatMap(f => Geo.crossings(line, f.geometry, 2).map(rc => ({ f, ...rc })))
-    .sort((a, b) => a.reach - b.reach);
-  const merged = [];
-  tr.forEach(t => { const m = merged.at(-1); if (m && t.reach <= m.carry + 25) m.carry = Math.max(m.carry, t.carry); else merged.push({ ...t }); });
-  // only real stands of trees (10+ yards across the line), at most three
-  const stands = merged.filter(t => t.carry - t.reach >= 10).slice(0, 3);
-  return rows.concat(stands).sort((a, b) => a.reach - b.reach);
-}
 const swatch = f => ({ water: f.properties.sub === "lateral" ? "#c62828" : "#3d8bd4", bunker: "#e6cf86", trees: "#2f6b34",
   ob_area: "#ffffff", fence: "#111", ob_line: "#eee", avoid: f.properties.color === "red" ? "#c62828" : "#e0a800" })[f.properties.kind] || "#999";
-function hazardHTML(rows) {
-  if (!rows.length) return '<div class="muted">No hazards on this line.</div>';
-  return rows.map(r => `<div><span class="sw" style="background:${swatch(r.f)}"></span>${esc(hazardName(r.f))}: <b class="num">${r.reach}</b> to reach, <b class="num">${r.carry}</b> to carry</div>`).join("");
+// ---- automatic carry yardages: every bunker and hazard near my line (within ~30 yd either side of the line from me to
+// the pin or my next planned target) and within reach (longest club + 20), nearest first. Front / middle / back are
+// straight-line yards from me to the near edge, the center and the far edge of the part of the outline near my line.
+const PANEL_SIDE_YD = 30, PANEL_KINDS = ["water", "bunker", "ob_area", "fence", "ob_line", "avoid"];
+function lineSide(line, p) {          // distance (m) from my line and which side: +1 left, -1 right
+  const o = line[0], P = Geo.xy(p, o); let best = null;
+  for (let i = 0; i < line.length - 1; i++) {
+    const A = Geo.xy(line[i], o), B = Geo.xy(line[i + 1], o), dx = B[0] - A[0], dy = B[1] - A[1], L2 = dx * dx + dy * dy || 1e-9;
+    const t = Math.max(0, Math.min(1, ((P[0] - A[0]) * dx + (P[1] - A[1]) * dy) / L2));
+    const ex = P[0] - (A[0] + t * dx), ey = P[1] - (A[1] + t * dy), d = Math.hypot(ex, ey);
+    if (!best || d < best.d) best = { d, s: Math.sign(dx * ey - dy * ex) };
+  }
+  return best;
+}
+function densify(pts, stepM = 2) {
+  const out = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const k = Math.max(1, Math.ceil(Geo.m(pts[i], pts[i + 1]) / stepM));
+    for (let j = 0; j < k; j++) out.push([pts[i][0] + (pts[i + 1][0] - pts[i][0]) * j / k, pts[i][1] + (pts[i + 1][1] - pts[i][1]) * j / k]);
+  }
+  return out.concat([pts.at(-1)]);
+}
+const panelName = f => { const p = f.properties;
+  return p.kind === "avoid" ? (p.name || "Avoid zone") : p.kind === "water" ? (p.sub === "lateral" ? "Lateral water" : "Water")
+    : p.kind === "bunker" ? (p.sub === "greenside" ? "Greenside bunker" : "Bunker") : "OB"; };
+function hazardPanel(course, n, line) {
+  const from = line[0], reach = Math.max(...A.settings.bag.map(b => b[1])) + 20, rows = [];   // in plays-like yards (altitude)
+  hazards(course, n).filter(f => PANEL_KINDS.includes(f.properties.kind)).forEach(f => {
+    const g = f.geometry, poly = g.type.includes("Polygon");
+    const near = Geo.linesOf(g).flatMap(r => densify(r)).map(p => ({ p, sd: lineSide(line, p), d: Geo.yd(from, p) }))
+      .filter(x => x.sd.d * YD <= PANEL_SIDE_YD);
+    if (!near.length) return;
+    const F = poly && Geo.inside(from, g) ? 0 : Math.min(...near.map(x => x.d)), B = Math.max(...near.map(x => x.d));
+    if (plays(course.slug, F) > reach || B < 5) return;
+    const c = [near.reduce((a, x) => a + x.p[0], 0) / near.length, near.reduce((a, x) => a + x.p[1], 0) / near.length];
+    const M = Math.min(B, Math.max(F, Geo.yd(from, c)));
+    const crosses = Geo.crossings(line, g, 1).length > 0, nl = near.filter(x => x.sd.s > 0).length;
+    const side = crosses ? "crossing" : nl >= near.length - nl ? "L" : "R";
+    rows.push({ f, F: Math.round(F), M: Math.round(M), B: Math.round(B), side, c, red: isRed(f) });
+  });
+  return rows.sort((a, b) => a.F - b.F);
+}
+// the club that carries the back edge of the nearest hazard my line crosses (shortest club in My Bag that gets there)
+function carryClub(rows, slug) {
+  const r = rows.find(x => x.side === "crossing" && x.B > 0); if (!r) return null;
+  const need = plays(slug, r.B), bag = A.settings.bag.slice().sort((a, b) => a[1] - b[1]);
+  const club = bag.find(([, d]) => d >= need);
+  return { r, txt: club ? `Carry ${panelName(r.f).toLowerCase()} ${r.B} → ${club[0]} (${club[1]} carry)` : `Carry ${panelName(r.f).toLowerCase()} ${r.B} → beyond your longest club (${bag.at(-1)[0]} ${bag.at(-1)[1]})` };
+}
+function panelHTML(rows, slug, open) {
+  const pl = playsLikeOn(slug), cc = carryClub(rows, slug);
+  const body = rows.length ? rows.map(r => `<div class="hzr"><span class="sw" style="background:${swatch(r.f)}"></span><span class="nm">${esc(panelName(r.f))} ${r.side === "crossing" ? "✕" : r.side}</span>
+      <span class="num">${r.F} / ${r.M} / ${r.B}</span>${pl ? `<span class="pl">plays ${plays(slug, r.F)} / ${plays(slug, r.M)} / ${plays(slug, r.B)}</span>` : ""}</div>`).join("")
+    : '<div class="muted">Nothing in play from here.</div>';
+  return `<div class="hzp"><div class="hzh"><b>Hazards in play</b><span class="muted">front / middle / back · ✕ = crossing</span><button class="linkbtn" id="hzToggle">${open ? "Hide" : `Show (${rows.length})`}</button></div>
+    ${open ? body + (cc ? `<div class="carry">${esc(cc.txt)}</div>` : "") : ""}</div>`;
 }
 function pinHazardsHTML(course, n, pin) {
   const near = hazards(course, n).filter(f => f.properties.kind !== "trees").map(f => ({ f, d: Geo.distToGeom(pin, f.geometry) * YD })).filter(x => x.d <= 15);
@@ -398,6 +436,8 @@ async function holeView(ctx) {
   let base = prefs.base;
   const aerial = L.imageOverlay(h.aerial.img, h.aerial.bounds, { pane: "aerial", interactive: false });
   let featLayer = null; const top = L.layerGroup().addTo(map);
+  const hzLayer = L.layerGroup().addTo(map);               // front/middle/back labels on the hazards in play
+  let hzOpen = prefs.hzOpen !== false;
   const holeBounds = () => L.latLngBounds([teeP, h.greenCenter, ...h.path.slice(1, -1)]).pad(0.12);
   const greenBounds = () => L.latLngBounds(h.green).pad(0.35);
   const frame = () => {
@@ -609,7 +649,7 @@ async function holeView(ctx) {
     top.clearLayers();
     const pin = pinOrCenter(h, getPin());
     $("#pinLabel", s).textContent = pinMoved() ? "Pin: moved" : "Pin: center (default)";
-    L.marker(teeP, { icon: teeIcon, interactive: false, pane: "lines" }).addTo(top);
+    L.marker(teeP, { icon: teeIcon, interactive: false, keyboard: false }).addTo(top);   // marker pane: placed and drawn upright on the turned map
     const pm = L.marker(pin, { icon: pinIcon(pinMoved()), draggable: tapMode === "pin", zIndexOffset: 800 }).addTo(top);
     pm.on("drag", e => pinLoupe.move(e.target.getLatLng()));
     pm.on("dragend", e => { pinLoupe.end(); const ll = e.target.getLatLng(); setPin(onGreen([ll.lat, ll.lng])); drawAll(false); });
@@ -654,12 +694,32 @@ async function holeView(ctx) {
       <div class="fcb">${fb ? `<span>F <b>${Math.round(before + fb.front)}</b></span>` : ""}<span>M <b>${c}</b></span>${fb ? `<span>B <b>${Math.round(before + fb.back)}</b></span>` : ""}</div>
       ${playsLikeOn(ctx.slug) ? `<div class="pl">Plays like ~${plays(ctx.slug, yd)} (estimate, ${meta(ctx.slug).elevationFt.toLocaleString()} ft)</div>` : ""}</div></div>`;
   }
+  // the line the hazard panel measures along: browse = from the tee; plan = from the start of the shot I'm setting,
+  // else my last planned target; round = tee (GPS on the tee) / my GPS / my last ball. To the pin through targets ahead.
+  function panelLine() {
+    if (ctx.mode === "browse") return playLine(h, teeP, getPin());
+    if (ctx.mode === "plan") {
+      const tg = planKeys.map(k => ph[k]?.p), pinP = pinOrCenter(h, getPin());
+      if (planKeys.includes(tapMode)) return playLine(h, planOrigin(tapMode), getPin(), tg);
+      const set = planKeys.filter(k => ph[k]?.p && !Geo.inRing(ph[k].p, h.green) && Geo.yd(ph[k].p, pinP) > 30);
+      return playLine(h, set.length ? ph[set.at(-1)].p : teeP, getPin(), tg);
+    }
+    const P = roundPlan?.holes[n];
+    return playLine(h, measureFrom(), getPin(), P ? planKeys.map(k => P[k]?.p) : []);
+  }
+  function hzLabels(rows) {
+    hzLayer.clearLayers();
+    rows.forEach(r => L.marker(r.c, { interactive: false, keyboard: false, zIndexOffset: 300, icon: L.divIcon({ className: "", iconSize: [0, 0],   // marker pane: stays upright on the turned map
+      html: `<div class="hzlbl${r.red ? " red" : ""}">${r.F}/${r.M}/${r.B}</div>` }) }).addTo(hzLayer));
+  }
   function renderSheet() {
     const sh = $("#sheet", s); const pin = pinOrCenter(h, getPin()); let html = "";
+    const hzRows = hazardPanel(course, n, panelLine()); hzLabels(hzRows);
+    const hzHTML = panelHTML(hzRows, ctx.slug, hzOpen) + pinHazardsHTML(course, n, pin);
     $("#ydHead", s).textContent = onTeeGPS() ? `par ${h.par} · plays ${playsToday()} today (card ${card})` : `par ${h.par} · ${card} yd`;
     if (ctx.mode === "browse") {
       html += yardBlock(teeP, `${tee} tee`);
-      html += `<div class="hz">${hazardHTML(hazardRows(course, n, playLine(h, teeP, getPin())))}</div>${pinHazardsHTML(course, n, pin)}`;
+      html += hzHTML;
       html += `<div class="row"><button class="btn alt" id="movePin">${tapMode === "pin" ? "Done moving pin" : "Move pin"}</button></div>`;
     } else if (ctx.mode === "plan") {
       html += yardBlock(teeP, `${tee} tee`, planKeys.map(k => ph[k]?.p));
@@ -674,8 +734,7 @@ async function holeView(ctx) {
           ${t?.p ? `<select data-club="${k}">${A.settings.bag.map(([c, d]) => `<option ${c === t.club ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>` : ""}
           ${warns.map(w => `<div class="warn${w.red ? " red" : ""}">Heads up: ${esc(w.msg)}. You can keep this target.</div>`).join("")}</div>`;
       });
-      const lineFrom = teeP; const line = playLine(h, lineFrom, getPin(), planKeys.map(k => ph[k]?.p));
-      html += `<div class="hz">${hazardHTML(hazardRows(course, n, line))}</div>${pinHazardsHTML(course, n, pin)}`;
+      html += hzHTML;
       html += `<div class="muted">Danger side${ph.dangerSet ? "" : " (suggested from nearby hazards)"}</div><div class="chips">${["short", "long", "left", "right"].map(d => `<button class="chip${ph.danger === d ? " on" : ""}" data-danger="${d}">${d}</button>`).join("")}</div>`;
       const sc = ph.score || h.par;   // shown as par until you change it or set a target
       html += `<div style="display:flex;gap:10px;align-items:center"><span class="muted">Planned score</span><button class="btn small alt" id="sm">−</button><b class="num" style="font-size:20px">${sc}</b><button class="btn small alt" id="sp">+</button></div>
@@ -690,8 +749,7 @@ async function holeView(ctx) {
       const P = roundPlan?.holes[n];
       html += yardBlock(from, label, P ? planKeys.map(k => P[k]?.p) : []);
       if (gpsTee) html += `<div class="today">Plays <b>${playsToday()}</b> today (card ${card})</div>`;
-      const line = playLine(h, from, getPin(), P ? planKeys.map(k => P[k]?.p) : []);
-      html += `<div class="hz">${hazardHTML(hazardRows(course, n, line))}</div>${pinHazardsHTML(course, n, pin)}`;
+      html += hzHTML;
       // plan on the tee: targets stay where you planned them; distances come from today's tee, and the first club is
       // re-picked from your bag if the new distance calls for a different one
       let repick = null;
@@ -721,6 +779,7 @@ async function holeView(ctx) {
     sh.innerHTML = html;
     const on = (id, f) => { const x = $("#" + id, sh); if (x) x.onclick = f; };
     on("movePin", () => setTap(tapMode === "pin" ? null : "pin"));
+    on("hzToggle", () => { hzOpen = !hzOpen; prefs.hzOpen = hzOpen; Store.set("viewPrefs", prefs); renderSheet(); });
     on("pv", () => holeView({ ...ctx, n: n > 1 ? n - 1 : NH }));
     on("nx", () => holeView({ ...ctx, n: n + 1 }));
     on("sum", () => ctx.mode === "plan" ? planSummary(plan.id) : roundSummary(round.id));

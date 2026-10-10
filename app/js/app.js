@@ -101,7 +101,7 @@ function densify(pts, stepM = 2) {
 }
 const panelName = f => { const p = f.properties;
   return p.kind === "avoid" ? (p.name || "Avoid zone") : p.kind === "water" ? (p.sub === "lateral" ? "Lateral water" : "Water")
-    : p.kind === "bunker" ? (p.sub === "greenside" ? "Greenside bunker" : "Bunker") : "OB"; };
+    : p.kind === "bunker" ? (p.sub === "greenside" ? "Greenside bunker" : "Fairway bunker") : "OB"; };
 function hazardPanel(course, n, line) {
   const from = line[0], reach = Math.max(...A.settings.bag.map(b => b[1])) + 20, rows = [];   // in plays-like yards (altitude)
   hazards(course, n).filter(f => PANEL_KINDS.includes(f.properties.kind)).forEach(f => {
@@ -119,19 +119,19 @@ function hazardPanel(course, n, line) {
   });
   return rows.sort((a, b) => a.F - b.F);
 }
-// the club that carries the back edge of the nearest hazard my line crosses (shortest club in My Bag that gets there)
+// the club that carries the back edge of the nearest hazard area my line crosses (shortest club in My Bag that gets
+// there). Only areas you fly over: an OB line or fence is a boundary, not something to carry.
 function carryClub(rows, slug) {
-  const r = rows.find(x => x.side === "crossing" && x.B > 0); if (!r) return null;
+  const r = rows.find(x => x.side === "crossing" && x.B > 0 && x.f.geometry.type.includes("Polygon")); if (!r) return null;
   const need = plays(slug, r.B), bag = A.settings.bag.slice().sort((a, b) => a[1] - b[1]);
   const club = bag.find(([, d]) => d >= need);
   return { r, txt: club ? `Carry ${panelName(r.f).toLowerCase()} ${r.B} → ${club[0]} (${club[1]} carry)` : `Carry ${panelName(r.f).toLowerCase()} ${r.B} → beyond your longest club (${bag.at(-1)[0]} ${bag.at(-1)[1]})` };
 }
 function panelHTML(rows, slug, open) {
   const pl = playsLikeOn(slug), cc = carryClub(rows, slug);
-  const body = rows.length ? rows.map(r => `<div class="hzr"><span class="sw" style="background:${swatch(r.f)}"></span><span class="nm">${esc(panelName(r.f))} ${r.side === "crossing" ? "✕" : r.side}</span>
-      <span class="num">${r.F} / ${r.M} / ${r.B}</span>${pl ? `<span class="pl">plays ${plays(slug, r.F)} / ${plays(slug, r.M)} / ${plays(slug, r.B)}</span>` : ""}</div>`).join("")
+  const body = rows.length ? rows.map(r => `<div class="hzr"><span class="sw" style="background:${swatch(r.f)}"></span><span class="nm">${esc(panelName(r.f))} ${r.side} — <b class="num">${r.F} / ${r.M} / ${r.B}</b></span>${pl ? `<span class="pl">plays ${plays(slug, r.F)} / ${plays(slug, r.M)} / ${plays(slug, r.B)}</span>` : ""}</div>`).join("")
     : '<div class="muted">Nothing in play from here.</div>';
-  return `<div class="hzp"><div class="hzh"><b>Hazards in play</b><span class="muted">front / middle / back · ✕ = crossing</span><button class="linkbtn" id="hzToggle">${open ? "Hide" : `Show (${rows.length})`}</button></div>
+  return `<div class="hzp"><div class="hzh"><b>Hazards in play</b><span class="muted">front / middle / back</span><button class="linkbtn" id="hzToggle">${open ? "Hide" : `Show (${rows.length})`}</button></div>
     ${open ? body + (cc ? `<div class="carry">${esc(cc.txt)}</div>` : "") : ""}</div>`;
 }
 function pinHazardsHTML(course, n, pin) {

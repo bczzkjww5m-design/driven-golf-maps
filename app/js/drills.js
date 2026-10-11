@@ -135,7 +135,7 @@ const CHECKS = {
   "Clock Drill": { label: "make rate from 3–6 ft", unit: "%", v: hs => { const b = puttStats(fx(hs, h => h.putts ? [h.putts] : [])).buckets[1]; return b.n ? 100 * b.made / b.n : null; } },
   "Start-Line Gate": { label: "make rate from 3–10 ft", unit: "%", v: hs => { const s = puttStats(fx(hs, h => h.putts ? [h.putts] : [])), n = s.buckets[1].n + s.buckets[2].n; return n ? 100 * (s.buckets[1].made + s.buckets[2].made) / n : null; } },
   "Landing Spot Towel": { label: "average chip finish from the fringe and fairway", unit: "ft", lowerBetter: true, v: hs => avg(fx(hs, h => h.chips.filter(c => ["Fringe", "Fairway"].includes(c.lie)).map(c => c.ft))) },
-  "Rough Chip Circuit": { label: "up-and-down rate from the rough", unit: "%", v: hs => { const o = hs.filter(h => h.sg?.lie === "Rough" && h.sg.ud != null); return o.length ? 100 * o.filter(h => h.sg.ud).length / o.length : null; } },
+  "Rough Chip Circuit": { label: "up-and-down rate from the rough", unit: "%", v: hs => { const o = hs.filter(h => ROUGHISH.includes(h.sg?.lie) && h.sg.ud != null); return o.length ? 100 * o.filter(h => h.sg.ud).length / o.length : null; } },
   "Up-and-Down Circuit": { label: "scrambling", unit: "%", v: hs => { const o = hs.filter(h => h.scramble != null); return o.length ? 100 * o.filter(h => h.scramble).length / o.length : null; } },
   "Bunker Line Drill": { label: "sand saves", unit: "%", v: hs => { const o = hs.filter(h => h.sandSave != null); return o.length ? 100 * o.filter(h => h.sandSave).length / o.length : null; } },
   "Wedge Ladder": { label: "average finish from 40–110 yd", unit: "ft", lowerBetter: true, v: hs => avg(fx(hs, h => h.wedge.map(w => w.ft))) },
@@ -167,8 +167,8 @@ async function prescriptions() {
   // chips by lie: fringe and fairway (and practice chips without a lie) for distance control; the rough for the Rough Chip Circuit
   const pchips = practiceLogs().slice(0, 40), chips = [...fx(hs, h => h.chips.filter(c => ["Fringe", "Fairway"].includes(c.lie)).map(c => c.ft)), ...pchips.filter(e => !e.lie || ["Fringe", "Fairway"].includes(e.lie)).map(e => e.ft)], ca = avg(chips);
   if (chips.length >= 10 && ca > 6) add("Chip distance control", (ca - 6) / 6, `Your chips from the fringe and fairway finish ${ca.toFixed(1)} ft from the hole on average (${chips.length} chips).`, `${ca.toFixed(1)} ft`, "average chip");
-  const rsg = hs.filter(h => h.sg?.lie === "Rough" && h.sg.ud != null), rud = rsg.length ? 100 * rsg.filter(h => h.sg.ud).length / rsg.length : null;
-  const rft = [...fx(hs, h => h.chips.filter(c => c.lie === "Rough").map(c => c.ft)), ...pchips.filter(e => e.lie === "Rough").map(e => e.ft)], rfa = avg(rft);
+  const rsg = hs.filter(h => ROUGHISH.includes(h.sg?.lie) && h.sg.ud != null), rud = rsg.length ? 100 * rsg.filter(h => h.sg.ud).length / rsg.length : null;
+  const rft = [...fx(hs, h => h.chips.filter(c => ROUGHISH.includes(c.lie)).map(c => c.ft)), ...pchips.filter(e => ROUGHISH.includes(e.lie)).map(e => e.ft)], rfa = avg(rft);
   if (rsg.length >= 5 && rud < 50) add("Chips from the rough", (50 - rud) / 50, `You got up and down from the rough ${rsg.filter(h => h.sg.ud).length} of ${rsg.length} times (${Math.round(rud)}%).`, `${Math.round(rud)}%`, "up & down, rough");
   else if (rft.length >= 5 && rfa > 8) add("Chips from the rough", (rfa - 8) / 8, `Your chips from the rough finish ${rfa.toFixed(1)} ft from the hole on average (${rft.length} chips).`, `${rfa.toFixed(1)} ft`, "rough chips");
   const sc = hs.filter(h => h.scramble != null), sp = sc.length ? 100 * sc.filter(h => h.scramble).length / sc.length : null;
@@ -425,11 +425,12 @@ async function lieStatsCard(container) {
   const card = el(`<div class="card"><p class="muted it">Reading your rounds…</p></div>`); container.appendChild(card);
   const hs = (await roundFacts()).flatMap(r => r.holes), pct = (a, n) => n ? `${Math.round(100 * a / n)}% <small class="muted">${a}/${n}</small>` : "–";
   const ftAvg = xs => xs.length ? `${Math.round(avg(xs))} ft` : "–";
-  const sg = L => hs.filter(h => h.sg?.lie === L), ap = L => fx(hs, h => h.appr.filter(a => a.lie === L));
+  const grp = L => L === "Rough & native" ? ROUGHISH : [L];   // rough, waste, native, heavy rough and desert roll up together
+  const sg = L => hs.filter(h => grp(L).includes(h.sg?.lie)), ap = L => fx(hs, h => h.appr.filter(a => grp(L).includes(a.lie)));
   const unknown = hs.filter(h => h.sg?.lie === "unknown").length + fx(hs, h => h.appr.filter(a => a.lie === "unknown")).length;
   card.innerHTML = `<div class="seclbl">Around the green, by lie</div><div class="tablewrap"><table class="t"><tr><th>Lie</th><th>Up and down</th><th>Proximity</th></tr>
-    ${["Fairway", "Rough", "Fringe", "Sand"].map(L => { const o = sg(L).filter(h => h.sg.ud != null); return `<tr><td>${L}</td><td>${pct(o.filter(h => h.sg.ud).length, o.length)}</td><td>${ftAvg(sg(L).map(h => h.sg.ft).filter(x => x != null))}</td></tr>`; }).join("")}</table></div>
+    ${["Fairway", "Rough & native", "Fringe", "Sand"].map(L => { const o = sg(L).filter(h => h.sg.ud != null); return `<tr><td>${L}</td><td>${pct(o.filter(h => h.sg.ud).length, o.length)}</td><td>${ftAvg(sg(L).map(h => h.sg.ft).filter(x => x != null))}</td></tr>`; }).join("")}</table></div>
     <div class="seclbl">Approaches (50–250 yd), by lie</div><div class="tablewrap"><table class="t"><tr><th>Lie</th><th>Green hit</th><th>Proximity</th></tr>
-    ${["Fairway", "Rough"].map(L => { const o = ap(L); return `<tr><td>${L}</td><td>${pct(o.filter(a => a.on).length, o.length)}</td><td>${ftAvg(o.map(a => a.ft).filter(x => x != null))}</td></tr>`; }).join("")}</table></div>
+    ${["Fairway", "Rough & native"].map(L => { const o = ap(L); return `<tr><td>${L}</td><td>${pct(o.filter(a => a.on).length, o.length)}</td><td>${ftAvg(o.map(a => a.ft).filter(x => x != null))}</td></tr>`; }).join("")}</table></div>
     <p class="muted">Up and down = in the hole in 2 from your first shot within about 30 yd of the green.${unknown ? ` ${unknown} shot${unknown > 1 ? "s" : ""} from older rounds have no lie and aren't counted.` : ""}</p>`;
 }

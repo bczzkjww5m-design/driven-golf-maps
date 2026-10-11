@@ -6,7 +6,7 @@
 <title>Driven Golf</title>
 <!-- script ?v= matches APP_VERSION in js/store.js: bump both on every release so phones never mix old and new files -->
 <!-- home-screen app: "Add to Home Screen" opens full screen as "Driven Golf" -->
-<link rel="manifest" href="manifest.webmanifest?v=0.9.9-beta">
+<link rel="manifest" href="manifest.webmanifest?v=0.10.0-beta">
 <meta name="theme-color" content="#1E3A2B">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -272,6 +272,20 @@
   .liealt { all: unset; cursor: pointer; color: var(--claret); font: 500 13px var(--text); text-decoration: underline; text-underline-offset: 3px; padding: 4px 2px; }
   .penrow { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; font-size: 13px; min-height: 26px; color: var(--claret); }
   .penrow span { flex: 1 1 auto; } .penrow b { color: #C62828; font-family: var(--head); font-weight: 600; }
+  /* Map key and hazard editor rows */
+  .mkey { display: flex; flex-direction: column; gap: 2px; max-height: 62vh; overflow: auto; }
+  .mkey .seclbl { margin-top: 10px; }
+  .krow { display: flex; align-items: center; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--rule); }
+  .krow.tap { cursor: pointer; } .krow .grow b { font: 500 14px var(--text); } .krow small { display: block; color: var(--muted); font-size: 11.5px; line-height: 1.35; }
+  .ksw { flex: none; border: 1px solid var(--rule); background: #EDE6D2; }
+  .sev { display: inline-block; font: 600 9.5px var(--text); letter-spacing: .12em; text-transform: uppercase; padding: 1px 5px; border: 1px solid; }
+  .sev.red { color: #B3261E; border-color: #B3261E; } .sev.yellow { color: #8A6A10; border-color: #C99A1E; }
+  .hzctl { display: flex; align-items: center; gap: 12px; margin-top: 3px; flex-wrap: wrap; }
+  .sevseg { display: inline-flex; } .sevseg button { all: unset; cursor: pointer; font: 600 10px var(--text); letter-spacing: .12em; text-transform: uppercase; padding: 3px 8px; border: 1px solid var(--rule); color: var(--muted); }
+  .sevseg button[data-sev="red"].on { background: #B3261E; color: #fff; border-color: #B3261E; } .sevseg button[data-sev="yellow"].on { background: #C99A1E; color: #fff; border-color: #C99A1E; }
+  .tog { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+  .esatag { position: absolute; transform: translate(-50%, -50%); font: 700 9px var(--text); letter-spacing: .1em; color: #2F5B2A; background: #FFFDF7cc; border: 1px solid #6E9A62; padding: 0 3px; white-space: nowrap; }
+  .tsh { transform: translate(1.5px, 2.5px); }
   .undobar { left: 12px; right: 12px; background: var(--hunter); color: var(--ivory); border: 1px solid var(--brass); padding: 8px 12px; display: flex; align-items: center; gap: 12px; font-size: 14px; z-index: 720; }
   .undobar span { flex: 1; } .undobar button { all: unset; cursor: pointer; color: var(--brass); font: 600 12px var(--text); letter-spacing: .18em; text-transform: uppercase; min-height: 32px; padding: 0 4px; }
   .pflow { display: flex; flex-direction: column; gap: 10px; } .pflow .row .btn { text-transform: uppercase; }
@@ -354,9 +368,9 @@
 </head>
 <body>
 <div id="app"></div>
-<script src="js/geo.js?v=0.9.9-beta"></script>
-<script src="js/store.js?v=0.9.9-beta"></script>
-<script src="js/drills.js?v=0.9.9-beta"></script>
-<script src="js/app.js?v=0.9.9-beta"></script>
+<script src="js/geo.js?v=0.10.0-beta"></script>
+<script src="js/store.js?v=0.10.0-beta"></script>
+<script src="js/drills.js?v=0.10.0-beta"></script>
+<script src="js/app.js?v=0.10.0-beta"></script>
 </body>
 </html>

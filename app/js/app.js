@@ -21,16 +21,49 @@ const meta = slug => A.index.find(c => c.slug === slug) || {};
 const holeOf = (course, n) => course.holes[n - 1];
 const cardYards = (course, tee, n) => course.tees[tee]?.[n - 1];
 
-const KIND_LABEL = { water: "Water", bunker: "Bunker", trees: "Trees", ob_area: "Out of bounds", fence: "Fence (OB)", ob_line: "Course boundary (OB)", avoid: "Avoid zone" };
-const HAZARD_KINDS = ["water", "bunker", "trees", "ob_area", "fence", "ob_line", "avoid"];
+// ---- hazard types: name, short name (panel), default severity (red = penalty or lost ball: the bigger Auto-plan margin
+// and carry warnings; yellow = costly but playable: smaller-margin warnings, fine to carry), the hazard editor's group,
+// the lie a ball in it has, and where it comes from in OpenStreetMap. A hazard's own "sev" (the editor's switch) wins.
+const HZ_GROUPS = ["Water and penalty areas", "Sand", "Grass and natural", "Trees and rocks", "Boundaries", "My zones"];
+const HZT = {
+  "water:water":      { name: "Water", short: "Water", sev: "red", group: 0, lie: "Penalty area", osm: "natural=water, golf=water_hazard" },
+  "water:lateral":    { name: "Red penalty area", short: "Red penalty area", sev: "red", group: 0, lie: "Penalty area", osm: "golf=lateral_water_hazard" },
+  "water:yellow":     { name: "Yellow penalty area", short: "Yellow penalty area", sev: "red", group: 0, lie: "Penalty area", osm: "" },
+  wetland:            { name: "Wetland or marsh", short: "Wetland", sev: "red", group: 0, lie: "Penalty area", osm: "natural=wetland" },
+  esa:                { name: "Environmentally sensitive (no play)", short: "ESA", sev: "red", group: 0, lie: "Penalty area", osm: "" },
+  "bunker:fairway":   { name: "Fairway bunker", short: "Bunker", sev: "yellow", group: 1, lie: "Sand", osm: "golf=bunker" },
+  "bunker:greenside": { name: "Greenside bunker", short: "Greenside bunker", sev: "yellow", group: 1, lie: "Sand", osm: "golf=bunker" },
+  "bunker:pot":       { name: "Pot bunker", short: "Pot bunker", sev: "red", group: 1, lie: "Sand", osm: "golf=bunker" },
+  waste:              { name: "Waste area", short: "Waste area", sev: "yellow", group: 1, lie: "Waste area", osm: "natural=sand, golf=waste_area" },
+  native:             { name: "Native area", short: "Native area", sev: "yellow", group: 2, lie: "Native area", osm: "natural=scrub, heath, grassland; landuse=meadow" },
+  grass_bunker:       { name: "Grass bunker or hollow", short: "Grass bunker", sev: "yellow", group: 2, lie: "Rough", osm: "" },
+  heavy_rough:        { name: "Heavy rough", short: "Heavy rough", sev: "yellow", group: 2, lie: "Heavy rough", osm: "" },
+  trees:              { name: "Trees and woods", short: "Trees", sev: "yellow", group: 3, lie: "Trees", osm: "natural=wood, tree_row" },
+  rocks:              { name: "Rocks", short: "Rocks", sev: "red", group: 3, lie: "Penalty area", osm: "natural=bare_rock, natural=stone" },
+  desert:             { name: "Desert or arroyo", short: "Desert", sev: "red", group: 3, lie: "Desert", osm: "natural=scree, intermittent streams" },
+  ob_area:            { name: "Out of bounds", short: "OB", sev: "red", group: 4, lie: "Out of bounds", osm: "the course boundary and fences" },
+  fence:              { name: "Fence (OB)", short: "OB", sev: "red", group: 4, osm: "" },
+  ob_line:            { name: "Course boundary (OB)", short: "OB", sev: "red", group: 4, osm: "" },
+  avoid:              { name: "Avoid zone", short: "Avoid zone", sev: "yellow", group: 5, osm: "" },
+};
+const HAZARD_KINDS = ["water", "bunker", "trees", "ob_area", "fence", "ob_line", "avoid", "wetland", "esa", "waste", "native", "grass_bunker", "heavy_rough", "rocks", "desert"];
+const hzType = f => { const p = f.properties; return HZT[`${p.kind}:${p.sub || (p.kind === "bunker" ? "fairway" : p.kind === "water" ? "water" : "")}`] || HZT[p.kind] || { name: p.kind, short: p.kind, sev: "yellow", group: 3 }; };
+function sevOf(f) {
+  const p = f.properties;
+  if (p.kind === "avoid") return p.color === "red" ? "red" : "yellow";
+  if (p.sev) return p.sev;
+  if (p.kind === "native" && p.pa) return "red";              // native area played as a penalty area
+  return hzType(f).sev;
+}
 function hazardName(f) {
   const p = f.properties;
   if (p.kind === "avoid") return p.name || "Avoid zone";
-  if (p.kind === "water") return p.sub === "lateral" ? "Lateral water" : "Water";
-  if (p.kind === "bunker") return p.sub === "greenside" ? "Greenside bunker" : "Fairway bunker";
-  return KIND_LABEL[p.kind] || p.kind;
+  if (p.kind === "native" && sevOf(f) === "red") return "Native area (penalty area)";
+  return hzType(f).name;
 }
-const isRed = f => ["water", "ob_area", "fence", "ob_line"].includes(f.properties.kind) || (f.properties.kind === "avoid" && f.properties.color === "red");
+const isRed = f => sevOf(f) === "red";
+// hazards a shot has to fly over when its line crosses them: everything but trees and heavy rough (you play through those)
+const carryKind = f => HAZARD_KINDS.includes(f.properties.kind) && !["trees", "heavy_rough", "fence", "ob_line"].includes(f.properties.kind);
 // course features for a hole with the golfer's hazard edits and avoid zones applied
 function holeFeatures(course, n) {
   const ed = (Store.hazardEdits(course.slug)[n]) || {};
@@ -131,7 +164,7 @@ const swatch = f => ({ water: f.properties.sub === "lateral" ? "#c62828" : "#3d8
 // the pin or my next planned target) and within reach (longest club + 20), nearest first. Reach and carry are
 // straight-line yards from me to where my line enters and leaves the hazard, or, if my line misses it, to its nearest
 // and farthest points near my line. pF / pB are those points (the map labels sit there). A boundary line has reach only.
-const PANEL_SIDE_YD = 30, PANEL_KINDS = ["water", "bunker", "ob_area", "fence", "ob_line", "avoid"];
+const PANEL_SIDE_YD = 30, PANEL_KINDS = HAZARD_KINDS.filter(k => k !== "trees");
 function lineSide(line, p) {          // distance (m) from my line and which side: +1 left, -1 right
   const o = line[0], P = Geo.xy(p, o); let best = null;
   for (let i = 0; i < line.length - 1; i++) {
@@ -150,9 +183,7 @@ function densify(pts, stepM = 2) {
   }
   return out.concat([pts.at(-1)]);
 }
-const panelName = f => { const p = f.properties;
-  return p.kind === "avoid" ? (p.name || "Avoid zone") : p.kind === "water" ? (p.sub === "lateral" ? "Lateral water" : "Water")
-    : p.kind === "bunker" ? (p.sub === "greenside" ? "Greenside bunker" : "Fairway bunker") : "OB"; };
+const panelName = f => f.properties.kind === "avoid" ? (f.properties.name || "Avoid zone") : hzType(f).name;
 // where my line first runs into a hazard area and comes out again (1 m steps, a gap of 3 m ends the stretch)
 function crossPts(line, g) {
   const total = Geo.length(line); let a = null, b = null;
@@ -188,9 +219,7 @@ function carryClub(rows, slug) {
   const club = bag.find(([, d]) => d >= need);
   return { r, txt: club ? `Carry ${panelName(r.f).toLowerCase()} ${r.B} → ${club[0]} (${club[1]} carry)` : `Carry ${panelName(r.f).toLowerCase()} ${r.B} → beyond your longest club (${bag.at(-1)[0]} ${bag.at(-1)[1]})` };
 }
-const chipName = f => { const p = f.properties;
-  return p.kind === "avoid" ? (p.name || "Avoid zone") : p.kind === "water" ? (p.sub === "lateral" ? "Lateral water" : "Water")
-    : p.kind === "bunker" ? (p.sub === "greenside" ? "Greenside" : "Bunker") : "OB"; };
+const chipName = f => f.properties.kind === "avoid" ? (f.properties.name || "Avoid zone") : hzType(f).short;
 const hzSide = r => r.side === "crossing" ? "" : ` ${r.side}`;
 const hzYards = r => r.carry == null ? `${r.F} reach` : r.F > 0 ? `${r.F} reach / ${r.carry} carry` : `in it · ${r.carry} carry`;
 function panelHTML(rows, slug) {
@@ -207,10 +236,10 @@ function pinHazardsHTML(course, n, pin) {
 function targetWarnings(course, n, from, target) {
   const out = [];
   hazards(course, n).forEach(f => {
-    const red = isRed(f), yellow = f.properties.kind === "avoid" && f.properties.color === "yellow";
+    const red = isRed(f), yellow = !red && f.properties.kind !== "trees";
     if (!red && !yellow) return;
     const d = Geo.distToGeom(target, f.geometry) * YD;
-    if (d <= 15) out.push({ red, msg: `${Math.round(d)} yd from ${hazardName(f)}` });
+    if (red ? d <= 15 : d <= 6 && (f.properties.kind === "avoid" || !Geo.inRing(target, holeOf(course, n).green))) out.push({ red, msg: `${Math.round(d)} yd from ${hazardName(f)}` });
     else if (from && red) {
       const rc = Geo.reachCarry([from, target], f.geometry, 2);
       if (rc && rc.carry < Geo.yd(from, target) - 3) out.push({ red, msg: `line carries ${hazardName(f)} (${rc.reach} to reach, ${rc.carry} to carry)` });
@@ -230,7 +259,7 @@ function pickShot(course, n, k, from, p) {
   let hz = null;                                   // the crossed hazard with the farthest far edge short of the target
   hazards(course, n).forEach(f => {
     const kd = f.properties.kind;
-    if (!(kd === "bunker" || kd === "avoid" || isRed(f)) || !f.geometry.type.includes("Polygon")) return;
+    if (!carryKind(f) || !f.geometry.type.includes("Polygon")) return;
     const rc = Geo.reachCarry([from, p], f.geometry, 1);
     if (rc && rc.carry < dist - 3 && (!hz || rc.carry > hz.carry)) hz = { f, ...rc };
   });
@@ -252,7 +281,7 @@ function pickShot(course, n, k, from, p) {
 function dangerSide(course, n, from, pin) {
   const tally = { short: 0, long: 0, left: 0, right: 0 };
   hazards(course, n).forEach(f => {
-    if (!["water", "bunker", "ob_area", "fence", "ob_line", "avoid"].includes(f.properties.kind)) return;
+    if (!HAZARD_KINDS.includes(f.properties.kind) || ["trees", "heavy_rough"].includes(f.properties.kind)) return;
     const d = Geo.distToGeom(pin, f.geometry) * YD; if (d > 20) return;
     let best = null; Geo.linesOf(f.geometry).forEach(l => l.forEach(q => { const dd = Geo.yd(pin, q); if (!best || dd < best.d) best = { d: dd, q }; }));
     if (!best) return;
@@ -298,7 +327,7 @@ function fairwayEnd(course, n) {
 // where a planned spot lands badly: rough, a hazard, trees, out of bounds, or past the end of the fairway
 function spotWarnings(course, n, k, from, p) {
   const h = holeOf(course, n), out = [];
-  polysOf(course, n, ["water", "bunker", "trees", "ob_area", "avoid"]).filter(f => Geo.inside(p, f.geometry)).forEach(f => {
+  polysOf(course, n, HAZARD_KINDS).filter(f => Geo.inside(p, f.geometry)).forEach(f => {
     const kd = f.properties.kind;
     out.push({ red: isRed(f), msg: kd === "trees" ? "Lands in the trees" : kd === "ob_area" ? "Lands out of bounds" : `Lands in the ${hazardName(f).toLowerCase()}` });
   });
@@ -313,17 +342,19 @@ function spotWarnings(course, n, k, from, p) {
 }
 // ---- the lie: where a ball sits, read from the map. Green, Sand, Penalty area (water), Out of bounds, Fringe (within ~3 yd of the green),
 // Tee, Fairway, Trees (a wood or tree row), else Rough. Shots saved before lies existed count as "unknown".
-const LIES = ["Tee", "Fairway", "Rough", "Fringe", "Sand", "Trees", "Green", "Penalty area", "Out of bounds"];
+const LIES = ["Tee", "Fairway", "Rough", "Fringe", "Sand", "Trees", "Green", "Waste area", "Native area", "Heavy rough", "Desert", "Penalty area", "Out of bounds"];
+const ROUGHISH = ["Rough", "Waste area", "Native area", "Heavy rough", "Desert"];    // "Rough & native" in stats
 function lieOf(course, n, p) {
-  const h = holeOf(course, n), inK = kinds => polysOf(course, n, kinds).some(f => Geo.inside(p, f.geometry));
+  const h = holeOf(course, n), hit = polysOf(course, n, HAZARD_KINDS.concat(["tee_box", "fairway"])).filter(f => Geo.inside(p, f.geometry)), has = k => hit.some(f => f.properties.kind === k);
   if (Geo.inRing(p, h.green)) return "Green";
-  if (inK(["bunker"])) return "Sand";
-  if (inK(["water"])) return "Penalty area";
-  if (inK(["ob_area"])) return "Out of bounds";
+  if (has("bunker")) return "Sand";
+  // red hazard areas are penalty areas (water, wetland, rocks, a native area played as one...); OB is its own
+  if (has("ob_area")) return "Out of bounds";
+  if (hit.some(f => f.properties.kind !== "avoid" && isRed(f) && hzType(f).lie !== "Desert")) return "Penalty area";
   if (Geo.distToGeom(p, greenGeom(h)) * YD <= 3) return "Fringe";
-  if (inK(["tee_box"])) return "Tee";
-  if (inK(["fairway"])) return "Fairway";
-  if (inK(["trees"])) return "Trees";
+  if (has("tee_box")) return "Tee";
+  if (has("fairway")) return "Fairway";
+  for (const k of ["waste", "desert", "native", "heavy_rough", "trees"]) if (has(k)) return hzType({ properties: { kind: k } }).lie;
   return "Rough";
 }
 // near an edge (within ~5 yd, where GPS or a tap could be off): the guess plus the other lies close by
@@ -356,7 +387,7 @@ const penWords = p => [p.ob && `${p.ob} OB`, p.pa && `${p.pa} penalty area`, p.o
 function carryShort(course, n, from, p, club) {
   let worst = null; const dist = Geo.yd(from, p), carry = reachYd(course.slug, club.carry);
   hazards(course, n).forEach(f => {
-    const kd = f.properties.kind; if (!(kd === "bunker" || kd === "avoid" || isRed(f)) || !f.geometry.type.includes("Polygon")) return;
+    if (!carryKind(f) || !f.geometry.type.includes("Polygon")) return;
     const rc = Geo.reachCarry([from, p], f.geometry, 1);
     if (rc && rc.carry < dist - 3 && carry < rc.carry + 5 && (!worst || rc.carry + 5 > worst.need)) worst = { name: panelName(f).toLowerCase(), need: rc.carry + 5 };
   });
@@ -367,15 +398,17 @@ function carryShort(course, n, from, p, club) {
 const STRATEGIES = { safe: { label: "Safe", margin: 25, blurb: "Wide of trouble, lay up more" },
   balanced: { label: "Balanced", margin: 15, blurb: "Longest club that stays safe" },
   aggressive: { label: "Aggressive", margin: 8, blurb: "Tighter lines, go for par 5s" } };
-// red hazards, OB and avoid zones: what the safety margin is measured from
-function nearestTrouble(course, n, p) {
+// what the safety margin is measured from: red hazards, OB and avoid zones need the full margin, yellow hazards (bunkers,
+// waste and native areas...) half of it; trees and heavy rough none. gap < 0 = too close.
+function nearestTrouble(course, n, p, margin = 15) {
   let best = null;
-  holeFeatures(course, n).filter(f => isRed(f) || f.properties.kind === "avoid").forEach(f => {
-    const d = Geo.distToGeom(p, f.geometry) * YD; if (!best || d < best.d) best = { d, f };
+  holeFeatures(course, n).filter(f => HAZARD_KINDS.includes(f.properties.kind) && !["trees", "heavy_rough"].includes(f.properties.kind)).forEach(f => {
+    const need = isRed(f) || f.properties.kind === "avoid" ? margin : margin / 2, d = Geo.distToGeom(p, f.geometry) * YD;
+    if (!best || d - need < best.gap) best = { d, f, gap: d - need };
   });
   return best;
 }
-const troubleName = f => f.properties.kind === "water" ? "the water" : f.properties.kind === "avoid" ? (f.properties.name || "the avoid zone").toLowerCase() : "out of bounds";
+const troubleName = f => ["ob_area", "fence", "ob_line"].includes(f.properties.kind) ? "out of bounds" : f.properties.kind === "avoid" ? (f.properties.name || "the avoid zone").toLowerCase() : `the ${hazardName(f).toLowerCase()}`;
 // the favorite full wedge: the wedge that carries closest to 100 yards
 function favWedge() {
   const ws = A.bag.filter(c => c.carry > 0 && isWedge(c.name)), all = ws.length ? ws : A.bag.filter(c => c.carry > 0 && c.carry <= 130);
@@ -383,9 +416,9 @@ function favWedge() {
 }
 // is this spot safe for a shot from `from` with this club: in the fairway, margin from trouble, carries what it crosses
 function spotCheck(course, n, k, from, p, club, margin) {
-  const nt = nearestTrouble(course, n, p), cs = carryShort(course, n, from, p, club), h = holeOf(course, n);
+  const nt = nearestTrouble(course, n, p, margin), cs = carryShort(course, n, from, p, club), h = holeOf(course, n);
   if (cs) return { ok: false, why: `doesn't carry the ${cs.name}`, trouble: `the ${cs.name}` };
-  if (nt && nt.d < margin) return { ok: false, why: `brings ${troubleName(nt.f)} into play`, trouble: troubleName(nt.f) };
+  if (nt && nt.gap < 0) return { ok: false, why: `brings ${troubleName(nt.f)} into play`, trouble: troubleName(nt.f) };
   if (k !== "approach" && Geo.yd(p, h.greenCenter) < 40 && !Geo.inRing(p, h.green)) return { ok: false, why: "runs up by the green" };
   if (k !== "approach" && !inFairway(course, n, p)) return { ok: false, why: spotWarnings(course, n, k, from, p)[0]?.msg.toLowerCase().replace("finishes", "finishes") || "misses the fairway" };
   return { ok: true, clear: nt ? Math.round(nt.d) : null };
@@ -395,11 +428,11 @@ function aimSpot(course, n, from, strat) {
   const h = holeOf(course, n), c = h.greenCenter;
   if (strat === "aggressive") return { p: c, note: "" };
   const side = { left: 0, right: 0 }, what = { left: "", right: "" };
-  hazards(course, n).filter(f => ["bunker", "water"].includes(f.properties.kind)).forEach(f => {
+  hazards(course, n).filter(f => carryKind(f) && f.properties.kind !== "avoid").forEach(f => {
     if (Geo.distToGeom(c, f.geometry) * YD > 25) return;
     let best = null; Geo.linesOf(f.geometry).forEach(l => l.forEach(q => { const d = Geo.m(c, q); if (!best || d < best.d) best = { d, q }; }));
     const mm = Geo.miss(from, c, best.q), sd = mm.cross > 0 ? "left" : "right";
-    if (Math.abs(mm.cross) > Math.abs(mm.along) * 0.6) { side[sd] += f.properties.kind === "water" ? 3 : 1; if (!what[sd] || f.properties.kind === "water") what[sd] = f.properties.kind === "water" ? "water" : "bunker"; }
+    if (Math.abs(mm.cross) > Math.abs(mm.along) * 0.6) { side[sd] += isRed(f) ? 3 : 1; if (!what[sd] || isRed(f)) what[sd] = f.properties.kind === "bunker" ? "bunker" : hazardName(f).toLowerCase(); }
   });
   if (!side.left === !side.right) return { p: c, note: "" };              // both sides guarded or neither: the middle
   const away = side.left ? -1 : 1, d = Geo.xy(c, from), L0 = Math.hypot(d[0], d[1]) || 1, perp = [-d[1] / L0 * away, d[0] / L0 * away];  // +1 = left
@@ -416,7 +449,7 @@ function autoPlanHole(course, n, tees, strat) {
     // tee shot: the longest tee club whose spot stays in the fairway with the margin; step down (into irons if need be)
     const teeClubs = bag.some(c => c.tee) ? bag.filter(c => c.tee) : bag, rest = bag.filter(c => !teeClubs.includes(c) && clubVal(c, "total") < clubVal(teeClubs.at(-1), "total"));
     const tries = [...teeClubs, ...rest.slice(0, 4)].map(c => { const p = clubSpot(course, n, "teeTarget", tee, c); return { c, p, ...spotCheck(course, n, "teeTarget", tee, p, c, M) }; });
-    const pick = tries.find(t => t.ok) || tries.slice().sort((a, b) => (nearestTrouble(course, n, b.p)?.d ?? 999) - (nearestTrouble(course, n, a.p)?.d ?? 999))[0];
+    const pick = tries.find(t => t.ok) || tries.slice().sort((a, b) => (nearestTrouble(course, n, b.p, M)?.gap ?? 999) - (nearestTrouble(course, n, a.p, M)?.gap ?? 999))[0];
     out.teeTarget = { p: pick.p, club: pick.c.name, clubSet: true, byClub: true };
     const first = tries[0];
     why.push(pick === first ? `${pick.c.name} finds the fairway${pick.clear != null && pick.clear < 40 ? `, ${pick.clear} yd from trouble` : ""}`
@@ -436,7 +469,7 @@ function autoPlanHole(course, n, tees, strat) {
       let s = total; while (s > 0 && Geo.yd(Geo.pointAt(line, s), h.greenCenter) < want) s -= 1;
       const near = [0, -5, 5, -10, 10, -15, 15, -20, 20, -30, 30].map(dy => Geo.pointAt(line, s + dy / YD))
         .filter(p => Geo.along(line, p).m > Geo.along(line, from).m + 20);
-      const safe = near.find(p => inFairway(course, n, p) && (nearestTrouble(course, n, p)?.d ?? 999) >= M) || near[0];
+      const safe = near.find(p => inFairway(course, n, p) && (nearestTrouble(course, n, p, M)?.gap ?? 999) >= 0) || near[0];
       let lp = safe, club = safe ? pickShot(course, n, "layup", from, safe)?.club : null, byClub = false;
       const longest = bag.filter(c => !/driver/i.test(c.name))[0];
       if (!lp || (longest && Geo.yd(from, lp) > reachYd(slug, clubVal(longest, "total")) + 5)) {   // can't get that far: the longest layup
@@ -1078,51 +1111,167 @@ function makeMap(container) {
   // layering: aerial photo at the bottom, illustrated fills above it, hazard outlines, then lines and markers on top
   // panes go inside the rotating container so the photo, drawings and markers turn together
   const parent = map.getPane("rotatePane") || map.getPane("mapPane");
-  [["aerial", 250], ["fills", 350], ["hz", 420], ["lines", 460]].forEach(([nm, z]) => { map.createPane(nm, parent); map.getPane(nm).style.zIndex = z; });
-  map.getPane("aerial").style.pointerEvents = "none"; map.getPane("fills").style.pointerEvents = "none";
+  [["aerial", 250], ["fills", 350], ["treesh", 352], ["trees", 354], ["greens", 356], ["slopes", 357], ["hz", 420], ["lines", 460]].forEach(([nm, z]) => { map.createPane(nm, parent); map.getPane(nm).style.zIndex = z; });
+  ["aerial", "fills", "treesh", "trees", "greens", "slopes"].forEach(nm => map.getPane(nm).style.pointerEvents = "none");
+  map.getPane("treesh").style.opacity = ".16";                // tree shadows: one soft layer, no darker overlaps
   return map;
 }
-// the drawn map, like a caddie's yardage book: paper, soft greens, ivory bunkers with dashed brass edges, lake water,
-// trees as hunter-outlined circles. Hazard outlines show in both views; on the aerial they stay light so they read.
-const FILL = { rough: "#C9D3AE", fairway: "#DCE4C3", green: "#BFD49A", tee_box: "#DCE4C3", bunker: "#F6F1E4", water: "#A9C2D3" };
-const EDGE = { green: { color: "#1E3A2B", weight: 1 }, bunker: { color: "#B08D57", weight: 1.2, dashArray: "3 3" }, water: { color: "#3E6E8E", weight: 1.2 } };
-function treeDots(f, g) {                     // a woods outline drawn as a scatter of small outlined circles
-  const ring = Geo.ringsOf(f.geometry)[0]; if (!ring) return;
-  const o = ring[0], xs = ring.map(p => Geo.xy(p, o)), minx = Math.min(...xs.map(q => q[0])), maxx = Math.max(...xs.map(q => q[0])), miny = Math.min(...xs.map(q => q[1])), maxy = Math.max(...xs.map(q => q[1]));
-  let n = 0;
-  for (let y = miny + 3; y < maxy && n < 60; y += 7) for (let x = minx + 3 + ((Math.round(y / 7) % 2) * 3.5); x < maxx && n < 60; x += 7) {
-    const p = Geo.ll([x, y], o); if (!Geo.inside(p, f.geometry)) continue; n++;
-    L.circle(p, { radius: 3, pane: "fills", interactive: false, color: "#1E3A2B", weight: .8, fillColor: "#C9D3AE", fillOpacity: 1 }).addTo(g);
-  }
-  if (!n) { const c = ring.reduce((a, q) => [a[0] + q[0] / ring.length, a[1] + q[1] / ring.length], [0, 0]); L.circle(c, { radius: 3, pane: "fills", interactive: false, color: "#1E3A2B", weight: .8, fillColor: "#C9D3AE", fillOpacity: 1 }).addTo(g); }
+// the drawn map, like a caddie's yardage book. Features are told apart by texture and lightness, not only color: rough
+// with faint grain, fairway with mowing stripes, rounded tees, greens with a fringe band, stippled bunkers with a brass
+// edge, water with faint waves, penalty areas with dashed red or yellow edges, OB as a white line with stakes, cart
+// paths as thin warm-gray lines, trees as lumpy canopies that merge into clusters. On the aerial only outlines show.
+const MAP_DEFS = `<svg id="mapdefs" width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <pattern id="pt-rough" width="7" height="7" patternUnits="userSpaceOnUse"><rect width="7" height="7" fill="#C9D3AE"/><circle cx="1.5" cy="2" r=".55" fill="#B3BF94"/><circle cx="5" cy="5.5" r=".5" fill="#BAC59B"/></pattern>
+  <pattern id="pt-heavy" width="6" height="6" patternUnits="userSpaceOnUse"><rect width="6" height="6" fill="#B8C494"/><path d="M1 4.5l.6-1.6.6 1.6M4 2l.6-1.6.6 1.6" stroke="#93A06F" stroke-width=".6" fill="none"/></pattern>
+  <pattern id="pt-fairway" width="26" height="26" patternUnits="userSpaceOnUse" patternTransform="rotate(55)"><rect width="26" height="26" fill="#DCE4C3"/><rect width="13" height="26" fill="#D7DFBD"/></pattern>
+  <pattern id="pt-sand" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="8" height="8" fill="#F1E6C8"/><circle cx="2" cy="2" r=".55" fill="#D7C59A"/><circle cx="6" cy="3.5" r=".45" fill="#DCCBA2"/><circle cx="3.5" cy="6.5" r=".5" fill="#D7C59A"/></pattern>
+  <pattern id="pt-waste" width="14" height="14" patternUnits="userSpaceOnUse"><rect width="14" height="14" fill="#EFE6CF"/><circle cx="3" cy="4" r="1.1" fill="#CDBE97"/><circle cx="10" cy="10" r=".9" fill="#D3C49E"/></pattern>
+  <pattern id="pt-water" width="18" height="10" patternUnits="userSpaceOnUse"><rect width="18" height="10" fill="#A9C2D3"/><path d="M1 5q2.2-2 4.4 0t4.4 0" stroke="#C4D6E2" stroke-width=".8" fill="none"/></pattern>
+  <pattern id="pt-native" width="14" height="12" patternUnits="userSpaceOnUse"><rect width="14" height="12" fill="#CFCC9F"/><path d="M2 5.5l1-2.5 1 2.5M2.9 5.5V2.6M9 11l1-2.5 1 2.5M9.9 11V8.1" stroke="#9C9864" stroke-width=".7" fill="none"/></pattern>
+  <pattern id="pt-grassb" width="7" height="7" patternUnits="userSpaceOnUse"><rect width="7" height="7" fill="#BDC99D"/><circle cx="3.5" cy="3.5" r=".5" fill="#A2AF80"/></pattern>
+  <pattern id="pt-desert" width="28" height="16" patternUnits="userSpaceOnUse"><rect width="28" height="16" fill="#E3D3B0"/><path d="M0 8q7-4 14 0t14 0" stroke="#CDB88C" stroke-width=".8" fill="none"/><circle cx="20" cy="3" r=".7" fill="#C9B386"/></pattern>
+  <pattern id="pt-rocks" width="12" height="12" patternUnits="userSpaceOnUse"><rect width="12" height="12" fill="#CBC6B9"/><path d="M2 4l2-1.5 2 .8-.6 2-2.4.4zM7.5 9.5l1.6-1.2 1.8.6-.5 1.6-2 .2z" fill="#A49D8F"/></pattern>
+  <pattern id="pt-wetland" width="14" height="12" patternUnits="userSpaceOnUse"><rect width="14" height="12" fill="#B8CBB8"/><path d="M1 9h4M8 4h4" stroke="#8FB0B0" stroke-width=".8"/><path d="M9 10l.7-2 .7 2M2 4l.7-2 .7 2" stroke="#6F8F6A" stroke-width=".6" fill="none"/></pattern>
+  <pattern id="pt-esa" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="7" height="7" fill="#D3DDBA"/><rect width="1.6" height="7" fill="#6E9A62"/></pattern>
+  <pattern id="pt-ob" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(-45)"><rect width="8" height="8" fill="#FFFFFF" fill-opacity=".18"/><rect width="1" height="8" fill="#FFFFFF" fill-opacity=".6"/></pattern>
+</defs></svg>`;
+function ensureMapDefs() { if (!document.getElementById("mapdefs")) document.body.insertAdjacentHTML("beforeend", MAP_DEFS); }
+const RED_EDGE = "#B3261E", YEL_EDGE = "#C99A1E";
+// a polygon drawn as a lumpy canopy ("cloud": bumps every few pixels) or with rounded corners ("round": tee boxes)
+const ShapePoly = L.Polygon.extend({
+  _updatePath() {
+    if (!this._renderer._setPath) return L.Polygon.prototype._updatePath.call(this);
+    const m = this._map, ppm = m && m._loaded ? Math.pow(2, m.getZoom() + 8) / (40075016.686 * Math.cos(m.getCenter().lat * Math.PI / 180)) : 2;
+    this._renderer._setPath(this, shapePath(this._parts, this.options.shape, Math.max(5, Math.min(14, (this.options.stepM || 2.6) * ppm))));   // bumps ~2.6 m apart
+  } });
+function shapePath(parts, mode, step) {
+  let d = "";
+  parts.forEach(ring => {
+    const n = ring.length; if (n < 3) return;
+    if (mode === "round") {
+      for (let i = 0; i < n; i++) {
+        const p = ring[i], a = ring[(i + n - 1) % n], b = ring[(i + 1) % n], la = p.distanceTo(a), lb = p.distanceTo(b), r = Math.min(5, la / 2.5, lb / 2.5);
+        const pa = p.add(a.subtract(p).multiplyBy(r / (la || 1))), pb = p.add(b.subtract(p).multiplyBy(r / (lb || 1)));
+        d += `${i ? "L" : "M"}${pa.x.toFixed(1)} ${pa.y.toFixed(1)}Q${p.x.toFixed(1)} ${p.y.toFixed(1)} ${pb.x.toFixed(1)} ${pb.y.toFixed(1)}`;
+      }
+      d += "Z"; return;
+    }
+    // cloud: walk the outline in equal steps; each step is an arc that bulges outward
+    let per = 0, area = 0; for (let i = 0; i < n; i++) { const p = ring[i], q = ring[(i + 1) % n]; per += p.distanceTo(q); area += p.x * q.y - q.x * p.y; }
+    const k = Math.max(6, Math.round(per / step)), seg = per / k, sweep = area > 0 ? 1 : 0, pts = [];
+    let i = 0, t = 0;
+    for (let j = 0; j < k; j++) {
+      let want = j * seg;
+      while (i < n) { const p = ring[i], q = ring[(i + 1) % n], L0 = p.distanceTo(q); if (t + L0 >= want) { const f = L0 ? (want - t) / L0 : 0; pts.push(L.point(p.x + (q.x - p.x) * f, p.y + (q.y - p.y) * f)); break; } t += L0; i++; }
+    }
+    const r = (seg * 0.62).toFixed(1);
+    pts.forEach((p, j) => { const q = pts[(j + 1) % pts.length]; d += (j ? "" : `M${p.x.toFixed(1)} ${p.y.toFixed(1)}`) + `A${r} ${r} 0 0 ${sweep} ${q.x.toFixed(1)} ${q.y.toFixed(1)}`; });
+    d += "Z";
+  });
+  return d || "M0 0";
+}
+const llRings = f => Geo.ringsOf(f.geometry).map(r => r.map(([la, lo]) => [la, lo]));
+// a hazard's look on the drawn map: its fill (a texture) and its edge
+function hzLook(f) {
+  const p = f.properties, k = p.kind, red = sevOf(f) === "red", dashed = c => ({ color: c, weight: 1.8, dashArray: "6 4" });
+  if (k === "water") return { fillColor: "url(#pt-water)", ...(p.sub === "lateral" ? dashed(RED_EDGE) : p.sub === "yellow" ? dashed(YEL_EDGE) : { color: "#3E6E8E", weight: 1.2 }) };
+  if (k === "bunker") return { fillColor: "url(#pt-sand)", color: "#B08D57", weight: p.sub === "pot" ? 1.8 : 1.1 };
+  if (k === "waste") return { fillColor: "url(#pt-waste)", ...(red ? dashed(RED_EDGE) : { color: "#0000", weight: 0 }) };
+  if (k === "native") return { fillColor: "url(#pt-native)", ...(red ? dashed(RED_EDGE) : { color: "#A39E6A", weight: .8 }) };
+  if (k === "grass_bunker") return { fillColor: "url(#pt-grassb)", ...(red ? dashed(RED_EDGE) : { color: "#8E9A6E", weight: .9, dashArray: "1.5 3" }) };
+  if (k === "heavy_rough") return { fillColor: "url(#pt-heavy)", ...(red ? dashed(RED_EDGE) : { color: "#0000", weight: 0 }) };
+  if (k === "desert") return { fillColor: "url(#pt-desert)", ...(red ? dashed(RED_EDGE) : dashed(YEL_EDGE)) };
+  if (k === "rocks") return { fillColor: "url(#pt-rocks)", ...(red ? dashed(RED_EDGE) : dashed(YEL_EDGE)) };
+  if (k === "wetland") return { fillColor: "url(#pt-wetland)", ...(red ? dashed(RED_EDGE) : dashed(YEL_EDGE)) };
+  if (k === "esa") return { fillColor: "url(#pt-esa)", ...dashed(RED_EDGE) };
+  if (k === "ob_area") return { fillColor: "url(#pt-ob)", color: "#FFFFFF", weight: 0 };
+  return null;
+}
+// OB: a white line with stake marks (and a soft dark halo so it reads on the light map)
+function obLine(f, g, M) {
+  const o = { pane: "hz", interactive: false, fill: false };
+  L.geoJSON(f, { ...o, style: { color: "#1B1B18", opacity: M ? .35 : .5, weight: 4.5 } }).addTo(g);
+  L.geoJSON(f, { ...o, style: { color: "#FFFFFF", weight: 2.4 } }).addTo(g);
+  L.geoJSON(f, { ...o, style: { color: "#1B1B18", opacity: .55, weight: 10, dashArray: "4 26", lineCap: "butt" } }).addTo(g);
+  L.geoJSON(f, { ...o, style: { color: "#FFFFFF", weight: 8, dashArray: "2 28", dashOffset: "-1", lineCap: "butt" } }).addTo(g);
 }
 function drawFeatures(map, feats, base, opts = {}) {
-  const g = L.layerGroup();
-  const order = ["rough", "trees", "fairway", "tee_box", "water", "bunker", "green"];
-  if (base === "map") {
-    feats.filter(f => FILL[f.properties.kind] || f.properties.kind === "trees").sort((a, b) => order.indexOf(a.properties.kind) - order.indexOf(b.properties.kind)).forEach(f => {
-      const k = f.properties.kind;
-      if (k === "trees") return treeDots(f, g);
-      L.geoJSON(f, { pane: "fills", interactive: false, style: { stroke: true, color: "#00000014", weight: .5, ...(EDGE[k] || {}), fillColor: FILL[k], fillOpacity: 1 } }).addTo(g);
+  ensureMapDefs();
+  const g = L.layerGroup(), M = base === "map", kd = f => f.properties.kind;
+  const poly = (f, style, pane = "fills") => L.geoJSON(f, { pane, interactive: false, style: { stroke: true, fillOpacity: 1, ...style } }).addTo(g);
+  if (M) {
+    const order = ["rough", "heavy_rough", "native", "desert", "rocks", "wetland", "esa", "waste", "fairway", "grass_bunker", "tee_box", "cartpath", "building", "water", "bunker", "ob_area", "green"];
+    feats.filter(f => order.includes(kd(f))).sort((a, b) => order.indexOf(kd(a)) - order.indexOf(kd(b))).forEach(f => {
+      const k = kd(f);
+      if (k === "rough") return poly(f, { fillColor: "url(#pt-rough)", color: "#0000", weight: 0 });
+      if (k === "fairway") return poly(f, { fillColor: "url(#pt-fairway)", color: "#00000012", weight: .5 });
+      if (k === "tee_box") return llRings(f).forEach(r => new ShapePoly(r, { shape: "round", pane: "fills", interactive: false, color: "#1E3A2B", weight: 1.2, fillColor: "#DCE4C3", fillOpacity: 1 }).addTo(g));
+      if (k === "green") { poly(f, { fill: false, color: "#D2DDB4", weight: 9, lineJoin: "round" }, "greens"); return poly(f, { fillColor: "#BFD49A", color: "#1E3A2B", weight: 1.1 }, "greens"); }   // above the trees
+      if (k === "cartpath") return L.geoJSON(f, { pane: "fills", interactive: false, style: { color: "#B8AE98", weight: 3, lineCap: "round", lineJoin: "round" } }).addTo(g);
+      if (k === "building") return poly(f, { fillColor: "#D9D6CF", color: "#C2BDB2", weight: .6 });
+      const lk = hzLook(f); if (lk) poly(f, lk);
+      if (k === "esa") { const c = llRings(f)[0]; if (c) L.marker(c.reduce((a, q) => [a[0] + q[0] / c.length, a[1] + q[1] / c.length], [0, 0]), { interactive: false, keyboard: false,
+        icon: L.divIcon({ className: "", iconSize: [0, 0], html: '<span class="esatag">ESA</span>' }) }).addTo(g); }
     });
+    // trees: a soft shadow, then every canopy's darker edge, then every canopy's fill on top, so canopies that touch or
+    // nearly touch (within ~2 m) merge into one cluster with one outline
+    const trees = feats.filter(f => kd(f) === "trees").flatMap(llRings), gap = 2.5;
+    const tp = (r, st) => new ShapePoly(r, { shape: "cloud", interactive: false, lineJoin: "round", fillOpacity: 1, ...st }).addTo(g);
+    trees.forEach(r => tp(r, { pane: "treesh", className: "tsh", color: "#1B1B18", weight: 2 * gap, fillColor: "#1B1B18" }));
+    trees.forEach(r => tp(r, { pane: "trees", color: "#55724A", weight: 2 * gap + 1.8, fillColor: "#55724A" }));
+    trees.forEach(r => tp(r, { pane: "trees", color: "#7E9C6B", weight: 2 * gap, fillColor: "#7E9C6B" }));
   } else {
-    feats.filter(f => ["green", "fairway"].includes(f.properties.kind)).forEach(f =>
+    feats.filter(f => ["green", "fairway"].includes(kd(f))).forEach(f =>
       L.geoJSON(f, { pane: "hz", interactive: false, style: { color: "#FFFDF7", weight: 1, opacity: .6, fill: false } }).addTo(g));
   }
-  // hazard outlines on top in both views
-  const M = base === "map";
+  // hazard edges that matter in both views, and the selection highlight (the editor)
   feats.forEach(f => {
-    const k = f.properties.kind, sel = opts.selected === f.properties.id;
+    const k = kd(f), sel = opts.selected === f.properties.id, red = sevOf(f) === "red";
+    if (k === "fence" || k === "ob_line") return obLine(f, g, M);
     let st = null;
-    if (k === "water") st = { color: f.properties.sub === "lateral" ? "#7A1F2B" : M ? "#3E6E8E" : "#A9C2D3", weight: M ? 1.4 : 2.2, fillColor: "#A9C2D3", fillOpacity: M ? 0 : .25 };
-    else if (k === "bunker" && !M) st = { color: "#F6F1E4", weight: 1.6, fill: false };
-    else if (k === "ob_area") st = { color: M ? "#7A1F2B" : "#FFFFFF", weight: 1.6, dashArray: "6 5", fillColor: M ? "#7A1F2B" : "#FFFFFF", fillOpacity: .08 };
-    else if (k === "fence" || k === "ob_line") st = { color: M ? "#7A1F2B" : "#FFFFFF", weight: M ? 1.8 : 3, dashArray: "8 6", fill: false };
+    if (k === "ob_area") st = { color: "#FFFFFF", weight: 2.2, fillOpacity: 0, ...(M ? {} : { fillColor: "#FFFFFF", fillOpacity: .12 }) };
+    else if (!M && k === "water") st = { color: f.properties.sub === "lateral" ? "#FF8A80" : f.properties.sub === "yellow" ? "#FFE08A" : "#A9C2D3", weight: 2.2, dashArray: f.properties.sub && f.properties.sub !== "water" ? "6 4" : null, fillColor: "#A9C2D3", fillOpacity: .25 };
+    else if (!M && k === "bunker") st = { color: "#F6F1E4", weight: 1.6, fill: false };
+    else if (!M && HAZARD_KINDS.includes(k) && !["trees", "avoid"].includes(k)) st = { color: red ? "#FF8A80" : "#FFE08A", weight: 1.8, dashArray: "5 4", fill: false };
     else if (k === "avoid") st = { color: f.properties.color === "red" ? "#7A1F2B" : "#A8862F", weight: 2, fillColor: f.properties.color === "red" ? "#7A1F2B" : "#A8862F", fillOpacity: .16 };
-    if (sel) st = { ...(st || {}), color: "#7A1F2B", weight: 4, fill: true, fillColor: "#7A1F2B", fillOpacity: .2 };
+    if (sel) st = { ...(st || {}), color: "#7A1F2B", weight: 4, fill: true, fillColor: "#7A1F2B", fillOpacity: .2, dashArray: null };
     if (st) L.geoJSON(f, { pane: "hz", interactive: !!opts.onSelect, style: st }).on("click", () => opts.onSelect && opts.onSelect(f)).addTo(g);
   });
   return g;
+}
+// a small sample of a feature's look (Map key, hazard editor): the same textures as the map
+function keySwatch(kind, sub, extra = {}) {
+  ensureMapDefs();
+  const f = { properties: { kind, sub, ...extra } }, w = 34, hh = 22, rect = (fill, st = "") => `<rect x="2" y="2" width="${w - 4}" height="${hh - 4}" rx="${kind === "tee_box" ? 4 : 2}" fill="${fill}" ${st}/>`;
+  let body;
+  if (kind === "rough") body = rect("url(#pt-rough)");
+  else if (kind === "fairway") body = rect("url(#pt-fairway)");
+  else if (kind === "tee_box") body = rect("#DCE4C3", 'stroke="#1E3A2B" stroke-width="1.2"');
+  else if (kind === "green") body = `<rect x="1" y="1" width="${w - 2}" height="${hh - 2}" rx="7" fill="#D2DDB4"/><rect x="5" y="5" width="${w - 10}" height="${hh - 10}" rx="5" fill="#BFD49A" stroke="#1E3A2B"/>`;
+  else if (kind === "cartpath") body = `<path d="M2 16C12 4 22 18 32 6" stroke="#B8AE98" stroke-width="3" fill="none" stroke-linecap="round"/>`;
+  else if (kind === "building") body = rect("#D9D6CF", 'stroke="#C2BDB2" stroke-width=".6"');
+  else if (kind === "trees") body = `<path d="M6 14a5 5 0 0 1 4-8a6 6 0 0 1 10-1a5 5 0 0 1 8 5a4 4 0 0 1-3 7h-15a4 4 0 0 1-4-3z" fill="#7E9C6B" stroke="#55724A" stroke-width="1.4"/>`;
+  else if (kind === "ob_line" || kind === "fence" || kind === "ob_area") body = `<rect width="${w}" height="${hh}" fill="#C9D3AE"/><path d="M2 11H32" stroke="#1B1B18" stroke-opacity=".35" stroke-width="4.5"/><path d="M2 11H32" stroke="#fff" stroke-width="2.4"/><path d="M9 4v14M24 4v14" stroke="#fff" stroke-width="2.4"/>`;
+  else if (kind === "avoid") body = rect(extra.color === "red" ? "#7A1F2B33" : "#A8862F33", `stroke="${extra.color === "red" ? "#7A1F2B" : "#A8862F"}" stroke-width="2"`);
+  else { const lk = hzLook(f) || { fillColor: "#ccc" };
+    body = rect(lk.fillColor, lk.weight ? `stroke="${lk.color}" stroke-width="${lk.weight}" ${lk.dashArray ? `stroke-dasharray="${lk.dashArray}"` : ""}` : "");
+    if (kind === "esa") body += `<text x="${w / 2}" y="15" text-anchor="middle" font-size="8" font-weight="700" fill="#2F5B2A">ESA</text>`; }
+  return `<svg class="ksw" width="${w}" height="${hh}" viewBox="0 0 ${w} ${hh}" aria-hidden="true">${body}</svg>`;
+}
+// the Map key: every look on the drawn map, hazards grouped as in the editor with their default severity
+function mapKey() {
+  const row = (sw, name, note = "") => `<div class="krow">${sw}<div class="grow"><b>${esc(name)}</b>${note ? `<small>${note}</small>` : ""}</div></div>`;
+  const sevChip = s => `<span class="sev ${s}">${s === "red" ? "Red" : "Yellow"}</span>`;
+  const course = [["rough", "Rough"], ["fairway", "Fairway"], ["tee_box", "Tee"], ["green", "Green and fringe"], ["cartpath", "Cart path"], ["building", "Building"]];
+  const hz = HZ_GROUPS.map((gname, gi) => {
+    const items = Object.entries(HZT).filter(([, t]) => t.group === gi && !(gi === 4 && t.name.startsWith("Fence")));
+    return `<div class="seclbl">${esc(gname)}</div>` + items.map(([key, t]) => { const [kind, sub] = key.split(":");
+      return row(keySwatch(kind, sub, kind === "avoid" ? { color: "red" } : {}), t.name, `${sevChip(t.sev)}${kind === "native" ? " · red when played as a penalty area" : ""}${kind === "avoid" ? " · red or yellow, your choice" : ""}${t.osm ? ` · ${kind === "ob_area" ? "from" : "OpenStreetMap:"} ${esc(t.osm)}` : kind === "avoid" ? "" : " · added by hand"}`); }).join("");
+  }).join("");
+  const md = modal(`<h3 style="margin:0">Map key</h3><div class="mkey"><div class="seclbl">The course</div>${course.map(([k, nm]) => row(keySwatch(k), nm)).join("")}${hz}
+    <p class="muted" style="font-size:12px">Red = a penalty or lost ball: Auto-plan keeps its full safety margin from it and warns when a line has to carry it. Yellow = costly but playable: half the margin, and fine to carry. Change a hazard's color in Hazards and avoid zones (the ⋯ menu on a hole).</p></div>
+    <button class="btn" id="kx">Close</button>`);
+  $("#kx", md).onclick = () => md.remove();
 }
 const pinIcon = (moved) => L.divIcon({ className: "", iconSize: [30, 30], iconAnchor: [4, 28],
   html: `<div class="pinm"><svg width="26" height="30" viewBox="0 0 26 30"><line x1="4" y1="2" x2="4" y2="29" stroke="#1B1B18" stroke-width="2"/><path d="M5 3 L23 8 L5 13 Z" fill="#7A1F2B" stroke="#FFFDF7" stroke-width="1"/><circle cx="4" cy="28" r="2.5" fill="#1B1B18"/></svg></div>` });
@@ -1240,7 +1389,7 @@ async function holeView(ctx) {
       <button class="iconbtn" id="menu" aria-label="More">⋯</button></div>
     <div class="mapwrap"><div id="map"></div>
       <div class="fl rcol">
-        <button class="rbtn" id="bAerial" data-b="aerial" aria-label="Aerial view" title="Aerial">${IC.aerial}</button>
+        <button class="rbtn" id="bAerial" data-b="aerial" aria-label="Map layers and key" title="Layers">${IC.aerial}</button>
         <button class="rbtn" id="pinBtn" aria-label="Green view: see the green and move the pin" title="Green view">${IC.pin}</button>
         <button class="rbtn" id="reset" aria-label="Center on me" title="Center on me">${IC.me}</button>
       </div>
@@ -1303,7 +1452,12 @@ async function holeView(ctx) {
     if (b === "aerial") aerial.addTo(map); else aerial.remove(); drawAll(); };
   const setView = v => { view = v; $("#pinBtn", s).classList.toggle("on", v === "green"); drawAll(); aim(); };   // draw (sheet height) first, then frame
   s.querySelectorAll("[data-b]").forEach(x => x.onclick = () => setBase(x.dataset.b));
-  $("#bAerial", s).onclick = () => setBase(base === "aerial" ? "map" : "aerial");   // round buttons toggle
+  $("#bAerial", s).onclick = () => {                       // layers: drawn map or aerial photo, and the Map key
+    const md = modal(`<h3 style="margin:0">Map layers</h3><div class="seg" style="display:flex"><button data-l="map" class="${base === "map" ? "on" : ""}" style="flex:1">Drawn map</button><button data-l="aerial" class="${base === "aerial" ? "on" : ""}" style="flex:1">Aerial photo</button></div>
+      <div class="list"><div class="item" id="mk"><div class="grow">Map key</div><span>›</span></div></div>`);
+    md.querySelectorAll("[data-l]").forEach(b => b.onclick = () => { md.remove(); setBase(b.dataset.l); });
+    $("#mk", md).onclick = () => { md.remove(); mapKey(); };
+  };
   // center on me: my GPS spot if I have a fresh fix, otherwise the whole hole (or green) again
   $("#reset", s).onclick = () => { if (A.gps && Date.now() - A.gps.t < 30000) map.setView(A.gps.p, Math.max(map.getZoom(), 18)); else frame(); };
   // one flag button: Green view, where the pin is always movable (drag the flag, tap the green, or a preset). The flag
@@ -1576,38 +1730,67 @@ async function holeView(ctx) {
     }
   }
   let ctxTrace = {};
+  // the types you can trace by hand, grouped like the Map key (boundary lines and avoid zones have their own tools)
   function typePicker(cb) {
-    const md = modal(`<h3 style="margin:0">What is it?</h3><div class="list" id="tp"></div>`);
-    [["Water", { kind: "water", sub: "water" }], ["Lateral water (red)", { kind: "water", sub: "lateral" }], ["Greenside bunker", { kind: "bunker", sub: "greenside" }],
-     ["Fairway bunker", { kind: "bunker", sub: "fairway" }], ["Trees / woods", { kind: "trees" }], ["Out of bounds", { kind: "ob_area" }]].forEach(([lab, t]) => {
-      const it = el(`<div class="item"><div class="grow">${lab}</div><span>›</span></div>`); it.onclick = () => { md.remove(); cb(t); }; $("#tp", md).appendChild(it); });
+    const md = modal(`<h3 style="margin:0">What is it?</h3><div id="tp" class="mkey"></div>`);
+    HZ_GROUPS.slice(0, 5).forEach((gname, gi) => {
+      const items = Object.entries(HZT).filter(([k, t]) => t.group === gi && !["fence", "ob_line"].includes(k));
+      $("#tp", md).insertAdjacentHTML("beforeend", `<div class="seclbl">${esc(gname)}</div>`);
+      items.forEach(([key, t]) => { const [kind, sub] = key.split(":");
+        const it = el(`<div class="krow tap">${keySwatch(kind, sub)}<div class="grow"><b>${esc(t.name)}</b><small><span class="sev ${t.sev}">${t.sev === "red" ? "Red" : "Yellow"}</span></small></div><span>›</span></div>`);
+        it.onclick = () => { md.remove(); cb(sub ? { kind, sub } : { kind }); }; $("#tp", md).appendChild(it); });
+    });
+  }
+  // a hazard's severity: red (penalty or lost ball) or yellow (costly but playable). Saved as one of my hazard edits;
+  // a native area's switch is "played as a penalty area"; an avoid zone keeps its color.
+  function setSev(f, sev) {
+    const id = f.properties.id, nat = f.properties.kind === "native";
+    if (f.properties.kind === "avoid") { const all = Store.avoid(ctx.slug); const z = (all[n] || []).find(x => x.id === id); if (z) z.color = sev; Store.saveAvoid(ctx.slug, all); return; }
+    const ed = Store.hazardEdits(ctx.slug), e2 = (ed[n] = ed[n] || {}), patch = nat ? { pa: sev === "red", sev: null } : { sev };
+    if (id.startsWith("u")) { const x = (e2.added || []).find(x => x.properties.id === id); if (x) { Object.assign(x.properties, patch); if (x.properties.sev == null) delete x.properties.sev; } }
+    else { const r = (e2.retyped = e2.retyped || {}); r[id] = { ...(r[id] || {}), ...patch }; }
+    Store.saveHazardEdits(ctx.slug, ed);
   }
   function hazardMenu() {
-    const md = modal(`<h3 style="margin:0">Hazards on hole ${n}</h3><p class="muted">Tap one to select it on the map, then retype or delete it. Your edits are saved on this phone.</p>
-      <div class="row"><button class="btn small" id="tr">Trace a new hazard</button><button class="btn small red" id="az">Draw an avoid zone</button></div><div class="list" id="hl"></div>
-      <button class="btn small alt" id="undoAll">Undo all hazard edits on this hole</button>`);
-    hazards(course, n).forEach(f => {
-      const it = el(`<div class="item"><span class="sw" style="background:${swatch(f)}"></span><div class="grow">${esc(hazardName(f))}${f.properties.id.startsWith("u") || f.properties.id.startsWith("a") ? ' <span class="pill blue">yours</span>' : ""}</div>
-        <button class="btn small alt" data-a="re">Retype</button><button class="btn small alt" data-a="del">Delete</button></div>`);
-      it.onclick = e => {
-        const a = e.target.dataset.a; selectedHz = f.properties.id; drawAll();
-        if (a === "del") {
-          if (f.properties.kind === "avoid") { const all = Store.avoid(ctx.slug); all[n] = (all[n] || []).filter(z => z.id !== f.properties.id); Store.saveAvoid(ctx.slug, all); }
-          else { const ed = Store.hazardEdits(ctx.slug); const e2 = (ed[n] = ed[n] || {});
-            if (f.properties.id.startsWith("u")) e2.added = (e2.added || []).filter(x => x.properties.id !== f.properties.id); else (e2.deleted = e2.deleted || []).push(f.properties.id);
-            Store.saveHazardEdits(ctx.slug, ed); }
-          md.remove(); selectedHz = null; drawAll(); hazardMenu(); toast("Deleted");
-        } else if (a === "re") {
-          md.remove(); typePicker(t => { const ed = Store.hazardEdits(ctx.slug); const e2 = (ed[n] = ed[n] || {});
-            if (f.properties.id.startsWith("u")) { const x = (e2.added || []).find(x => x.properties.id === f.properties.id); Object.assign(x.properties, t, t.sub ? {} : { sub: undefined }); }
-            else (e2.retyped = e2.retyped || {})[f.properties.id] = { sub: null, ...t };
-            Store.saveHazardEdits(ctx.slug, ed); drawAll(); hazardMenu(); });
-        }
-      };
-      $("#hl", md).appendChild(it);
+    const md = modal(`<h3 style="margin:0">Hazards on hole ${n}</h3><p class="muted">Tap one to see it on the map. Red = penalty or lost ball (Auto-plan's full margin, carry warnings); yellow = costly but playable. Your edits are saved on this phone.</p>
+      <div class="row"><button class="btn small" id="tr">Trace a new hazard</button><button class="btn small red" id="az">Draw an avoid zone</button></div><div id="hl" class="mkey"></div>
+      <button class="btn small alt" id="mk">Map key</button><button class="btn small alt" id="undoAll">Undo all hazard edits on this hole</button>`);
+    const all = hazards(course, n), groups = HZ_GROUPS.map((gname, gi) => [gname, all.filter(f => (f.properties.kind === "avoid" ? 5 : hzType(f).group) === gi)]);
+    groups.forEach(([gname, list]) => {
+      if (!list.length) return;
+      $("#hl", md).insertAdjacentHTML("beforeend", `<div class="seclbl">${esc(gname)} · ${list.length}</div>`);
+      // trees come in many small pieces: one line for all of them
+      const rows = list[0].properties.kind === "trees" && list.every(f => f.properties.kind === "trees") ? [list[0]] : list;
+      rows.forEach(f => {
+        const p = f.properties, sv = sevOf(f), mine = p.id.startsWith("u") || p.id.startsWith("a"), many = rows !== list;
+        const sw = p.kind === "native" ? `<label class="tog"><input type="checkbox" data-pa ${sv === "red" ? "checked" : ""}> Played as penalty area</label>`
+          : ["ob_area", "fence", "ob_line"].includes(p.kind) || many ? `<span class="sev ${sv}">${many ? `${list.length} areas · ` : ""}${sv === "red" ? "Red" : "Yellow"}</span>`
+          : `<span class="seg sevseg"><button data-sev="red" class="${sv === "red" ? "on" : ""}">Red</button><button data-sev="yellow" class="${sv === "yellow" ? "on" : ""}">Yellow</button></span>`;
+        const it = el(`<div class="krow">${keySwatch(p.kind, p.sub, { ...p })}<div class="grow"><b>${esc(hazardName(f))}</b>${mine ? ' <span class="pill blue">yours</span>' : ""}${p.src === "osm" ? ' <small>OpenStreetMap</small>' : ""}
+          <div class="hzctl">${sw}${many ? "" : `<button class="linkbtn" data-a="re">Retype</button><button class="linkbtn" data-a="del">Delete</button>`}</div></div></div>`);
+        it.onclick = e => {
+          const a = e.target.dataset.a; selectedHz = p.id; drawAll();
+          if (e.target.dataset.sev) { setSev(f, e.target.dataset.sev); md.remove(); drawAll(); renderSheet(); hazardMenu(); return; }
+          if (e.target.matches("[data-pa]")) { setSev(f, e.target.checked ? "red" : "yellow"); md.remove(); drawAll(); renderSheet(); hazardMenu(); return; }
+          if (a === "del") {
+            if (p.kind === "avoid") { const av = Store.avoid(ctx.slug); av[n] = (av[n] || []).filter(z => z.id !== p.id); Store.saveAvoid(ctx.slug, av); }
+            else { const ed = Store.hazardEdits(ctx.slug); const e2 = (ed[n] = ed[n] || {});
+              if (p.id.startsWith("u")) e2.added = (e2.added || []).filter(x => x.properties.id !== p.id); else (e2.deleted = e2.deleted || []).push(p.id);
+              Store.saveHazardEdits(ctx.slug, ed); }
+            md.remove(); selectedHz = null; drawAll(); hazardMenu(); toast("Deleted");
+          } else if (a === "re") {
+            md.remove(); typePicker(t => { const ed = Store.hazardEdits(ctx.slug); const e2 = (ed[n] = ed[n] || {});
+              if (p.id.startsWith("u")) { const x = (e2.added || []).find(x => x.properties.id === p.id); Object.assign(x.properties, t, t.sub ? {} : { sub: undefined }); }
+              else (e2.retyped = e2.retyped || {})[p.id] = { sub: null, ...t };
+              Store.saveHazardEdits(ctx.slug, ed); drawAll(); hazardMenu(); });
+          }
+        };
+        $("#hl", md).appendChild(it);
+      });
     });
     $("#tr", md).onclick = () => { md.remove(); ctxTrace = { kind: "hazard" }; trace = []; setTap("trace"); };
     $("#az", md).onclick = () => { md.remove(); ctxTrace = { kind: "avoid" }; trace = []; setTap("trace"); };
+    $("#mk", md).onclick = () => mapKey();
     $("#undoAll", md).onclick = () => { const ed = Store.hazardEdits(ctx.slug); delete ed[n]; Store.saveHazardEdits(ctx.slug, ed); md.remove(); drawAll(); toast("Back to the original hazards"); };
     md.addEventListener("click", e => { if (e.target === md) { selectedHz = null; drawAll(); } });
   }
@@ -1646,7 +1829,7 @@ async function holeView(ctx) {
     // the pin's slope, as a small caption on the map (Green view only)
     const cap = $("#slopeCap", s), read = view === "green" ? pinSlope() : null; cap.hidden = !read; cap.textContent = read || "";
     const sh = slopeHole(); if (!sh || view !== "green" || !slopesOn()) return;
-    L.imageOverlay("data/" + sh.img, sh.bounds, { pane: "fills", interactive: false }).addTo(slopeLayer);
+    L.imageOverlay("data/" + sh.img, sh.bounds, { pane: "slopes", interactive: false, opacity: 0.6 }).addTo(slopeLayer);
     slopeArrows(sh);
   }
   // downhill arrows on an even grid: about every 5 ft (Santa Fe's coarser lidar: about 6.5 ft), every 2.5-3 ft zoomed

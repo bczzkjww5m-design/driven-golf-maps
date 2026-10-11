@@ -126,11 +126,12 @@
   .small.danger { background: var(--flag); color: #fff; box-shadow: none; }
   #map { background: #EDE6D2 !important; }
   .loupe { background: #EDE6D2; } .loupe::before, .loupe::after { background: var(--ink); }
+  header .home { color: var(--brass); text-decoration: none; font-size: 26px; line-height: 1; width: 44px; height: 44px; display: grid; place-items: center; border-radius: 999px; box-shadow: inset 0 0 0 1px var(--brass); flex: 0 0 auto; }
 </style>
 </head>
 <body>
 <header>
-  <h1>Braemar · Short Game</h1>
+  <a class="home" href="./" aria-label="Back to the Clubhouse">‹</a><h1>Braemar · Short Game</h1>
   <div class="seg" role="tablist" aria-label="View">
     <button id="shotViewBtn" class="on" role="tab">Shot view</button>
     <button id="greenViewBtn" role="tab">Green view</button>

@@ -748,6 +748,8 @@ function profilePage() {
   $("#ec", acts).onclick = () => profileEdit("bag"); $("#ex", acts).onclick = exportData; b.appendChild(acts);
   const data = el(`<p class="muted it" style="margin:0">Saved on this phone only. Export a backup about once a month${last == null ? " (no backup yet)" : ` (last one ${last} day${last === 1 ? "" : "s"} ago)`}. <button class="linkbtn" id="im">Import data</button> · Driven Golf ${APP_VERSION}</p>`);
   $("#im", data).onclick = importData; b.appendChild(data);
+  b.appendChild(el(`<h2>Mapping</h2>`));
+  b.appendChild(el(`<div class="list"><a class="item" style="text-decoration:none;color:inherit" href="../handmap/great28.html"><div class="grow"><b>Map the Great 28</b><small>Tap each hole's tee and green on the aerial, then send Claude the file</small></div><span>›</span></a></div>`));
 }
 
 // ---------------------------------------------------------------- rounds & plans: create

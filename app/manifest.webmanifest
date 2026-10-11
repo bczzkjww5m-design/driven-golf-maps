@@ -1,14 +1,14 @@
 {
   "name": "Driven Golf",
   "short_name": "Driven Golf",
-  "description": "Course maps, yardages, round plans and stats.",
+  "description": "Mastering the art of learning to play your best golf.",
   "id": "./",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#1f4d2b",
-  "theme_color": "#1f4d2b",
+  "background_color": "#F6F1E4",
+  "theme_color": "#1E3A2B",
   "icons": [
     { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },

@@ -60,7 +60,7 @@ try { Object.keys(localStorage).filter(k => k.startsWith("dg:teeFix:")).forEach(
 // ---------------------------------------------------------------- versions, safe updates, backups
 // APP_VERSION: shown in the profile, the export file and feedback emails. DATA_VERSION: the saved-data format.
 // Updates never delete saved data: migrate() only adds/converts, and keeps the old keys.
-const APP_VERSION = "0.9.0-beta";
+const APP_VERSION = "0.9.1-beta";
 const DATA_VERSION = 2;
 Store.migrate = function () {
   try {
@@ -80,12 +80,17 @@ Store.exportAll = function () {
     const raw = localStorage.getItem(k);
     try { data[k.slice(3)] = JSON.parse(raw); } catch { data[k.slice(3)] = { $raw: raw }; }   // readable JSON in the file
   });
-  return { app: "Driven Golf", appVersion: APP_VERSION, dataVersion: Store.get("dataVersion", DATA_VERSION), exportedAt: new Date().toISOString(), data };
+  // practice shots are saved by the practice pages under their own names: include them too
+  const practice = {};
+  Object.keys(localStorage).filter(k => k.startsWith("driven-practice:")).forEach(k => {
+    const raw = localStorage.getItem(k); try { practice[k] = JSON.parse(raw); } catch { practice[k] = { $raw: raw }; } });
+  return { app: "Driven Golf", appVersion: APP_VERSION, dataVersion: Store.get("dataVersion", DATA_VERSION), exportedAt: new Date().toISOString(), data, practice };
 };
 Store.importAll = function (file) {
   if (!file || file.app !== "Driven Golf" || typeof file.data !== "object") throw new Error("That isn't a Driven Golf backup file.");
   const before = Store.exportAll();                         // one safety copy of what was here, in case of a mistake
-  Object.keys(localStorage).filter(k => k.startsWith("dg:") && k !== "dg:_beforeImport").forEach(k => localStorage.removeItem(k));
+  Object.keys(localStorage).filter(k => (k.startsWith("dg:") && k !== "dg:_beforeImport") || (file.practice && k.startsWith("driven-practice:"))).forEach(k => localStorage.removeItem(k));
+  Object.entries(file.practice || {}).forEach(([k, v]) => { if (k.startsWith("driven-practice:")) localStorage.setItem(k, v && typeof v === "object" && "$raw" in v ? v.$raw : JSON.stringify(v)); });
   Object.entries(file.data).forEach(([k, v]) => {
     if (k === "_beforeImport") return;
     localStorage.setItem("dg:" + k, v && typeof v === "object" && "$raw" in v ? v.$raw : JSON.stringify(v));

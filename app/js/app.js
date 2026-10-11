@@ -157,12 +157,21 @@ function carryClub(rows, slug) {
   const club = bag.find(([, d]) => d >= need);
   return { r, txt: club ? `Carry ${panelName(r.f).toLowerCase()} ${r.B} → ${club[0]} (${club[1]} carry)` : `Carry ${panelName(r.f).toLowerCase()} ${r.B} → beyond your longest club (${bag.at(-1)[0]} ${bag.at(-1)[1]})` };
 }
+const chipName = f => { const p = f.properties;
+  return p.kind === "avoid" ? (p.name || "Avoid zone") : p.kind === "water" ? (p.sub === "lateral" ? "Lateral water" : "Water")
+    : p.kind === "bunker" ? (p.sub === "greenside" ? "Greenside" : "Bunker") : "OB"; };
 function panelHTML(rows, slug, open) {
-  const pl = playsLikeOn(slug), cc = carryClub(rows, slug);
-  const body = rows.length ? rows.map(r => `<div class="hzr"><span class="sw" style="background:${swatch(r.f)}"></span><span class="nm">${esc(panelName(r.f))} ${r.side} — <b class="num">${r.F} / ${r.M} / ${r.B}</b></span>${pl ? `<span class="pl">plays ${plays(slug, r.F)} / ${plays(slug, r.M)} / ${plays(slug, r.B)}</span>` : ""}</div>`).join("")
-    : '<div class="muted">Nothing in play from here.</div>';
-  return `<div class="hzp"><div class="hzh"><b>Hazards in play</b><span class="muted">front / middle / back</span><button class="linkbtn" id="hzToggle">${open ? "Hide" : `Show (${rows.length})`}</button></div>
-    ${open ? body + (cc ? `<div class="carry">${esc(cc.txt)}</div>` : "") : ""}</div>`;
+  const pl = playsLikeOn(slug), cc = carryClub(rows, slug), sd = r => r.side === "crossing" ? "✕" : r.side;
+  const cls = r => r.f.properties.kind === "bunker" ? "sand" : r.f.properties.kind === "water" && r.f.properties.sub !== "lateral" ? "water" : r.red ? "red" : "";
+  // chips: "Water L · 161 carry" (an OB line or fence is a boundary: yards to reach it instead)
+  const sideW = r => r.side === "crossing" ? "across" : r.side === "L" ? "left" : "right";
+  const list = rows.length ? `<div class="hzlist">${rows.map(r => `<div class="hl"><span>${esc(chipName(r.f))}, ${sideW(r)}</span><span class="lead"></span><b>${r.f.geometry.type.includes("Polygon") ? `${r.B} to carry` : `${r.F} to reach`}</b></div>`).join("")}</div>`
+    : '<div class="muted it">No hazards in play from here.</div>';
+  const chips = rows.length ? `<div class="hzchips">${rows.map(r => `<span class="hzchip ${cls(r)}">${esc(chipName(r.f))} ${sd(r)} · ${r.f.geometry.type.includes("Polygon") ? `${r.B} carry` : `${r.F} to it`}</span>`).join("")}</div>`
+    : '<div class="muted">No hazards in play from here.</div>';
+  const body = rows.map(r => `<div class="hzr"><span class="sw" style="background:${swatch(r.f)}"></span><span class="nm">${esc(panelName(r.f))} ${r.side} — <b class="num">${r.F} / ${r.M} / ${r.B}</b></span>${pl ? `<span class="pl">plays ${plays(slug, r.F)} / ${plays(slug, r.M)} / ${plays(slug, r.B)}</span>` : ""}</div>`).join("");
+  return { chips: `<div class="hzp"><div class="hzh"><b>Hazards in play</b><span class="muted"></span>${rows.length ? `<button class="linkbtn" id="hzToggle">${open ? "Hide" : "Front · middle · back"}</button>` : ""}</div>
+    ${list}${open && rows.length ? `<div class="hzp">${body}</div>` : ""}</div>`, carry: cc ? `<div class="carry">${esc(cc.txt)}</div>` : "" };
 }
 function pinHazardsHTML(course, n, pin) {
   const near = hazards(course, n).filter(f => f.properties.kind !== "trees").map(f => ({ f, d: Geo.distToGeom(pin, f.geometry) * YD })).filter(x => x.d <= 15);
@@ -194,30 +203,165 @@ function feedbackHref() {
   return `mailto:aaronweinard@gmail.com?subject=${encodeURIComponent(`Driven Golf feedback (${APP_VERSION})`)}&body=${encodeURIComponent(body)}`;
 }
 const feedbackLink = () => `<a class="fb" href="${feedbackHref()}">Feedback</a>`;
-function screen(title, back, body, where = {}) {
-  app.innerHTML = ""; A.where = { screen: title, ...where };
-  const s = el(`<div class="screen"><div class="bar">${back ? '<button class="back" aria-label="Back">‹</button>' : ""}<h1>${esc(title)}</h1>${feedbackLink()}</div><div class="body"></div></div>`);
+function screen(title, back, body, where = {}, opts = {}) {
+  const sc = shell({ screen: title, ...where }, opts.tab || A.tab || "home", opts.tabs !== false);
+  const s = el(`<div class="bar">${back ? '<button class="back" aria-label="Back">‹</button>' : ""}<h1>${esc(title)}</h1>${feedbackLink()}</div>`);
+  const bd = el(`<div class="body"></div>`); sc.append(s, bd);
   if (back) $(".back", s).onclick = back;
-  app.appendChild(s); stopMap();
-  const b = $(".body", s); if (typeof body === "string") b.innerHTML = body; return b;
+  if (typeof body === "string") bd.innerHTML = body; return bd;
 }
 
+// ---------------------------------------------------------------- brand pieces
+// the crest: shield with a brass outline and a thin inner line, DG, a claret flag, EST. 2026
+const CREST = (px = 40) => `<svg class="crest" width="${px}" height="${Math.round(px * 76 / 64)}" viewBox="0 0 64 76" role="img" aria-label="Driven Golf crest">
+  <path d="M5 3H59V38C59 55 45 66 32 71 19 66 5 55 5 38Z" fill="#B08D57"/><path d="M7 5H57V38C57 54 44 64 32 68.6 20 64 7 54 7 38Z" fill="#1E3A2B"/>
+  <path d="M10.5 8.5H53.5V38C53.5 51 42 60 32 64.4 22 60 10.5 51 10.5 38Z" fill="none" stroke="#B08D57" stroke-width=".8"/>
+  <path d="M32 13V24" stroke="#F6F1E4" stroke-width="1.1"/><path d="M32.4 13 40 15.6 32.4 18.2Z" fill="#7A1F2B"/>
+  <text x="32" y="46" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-weight="600" font-size="17" fill="#F6F1E4">DG</text>
+  <path d="M26 49.5H38" stroke="#B08D57" stroke-width=".8"/>
+  <text x="32" y="56.6" text-anchor="middle" font-family="Jost, sans-serif" font-weight="500" font-size="4.2" letter-spacing=".9" fill="#B08D57">EST. 2026</text></svg>`;
+const LOGO = CREST;
+const WORDMARK = `<span class="wordmark"><b>Driven Golf</b><i>Mastering the art of learning to play your best golf.</i></span>`;
+const initials = name => (name || "").trim().split(/\s+/).map(w => w[0]).join("").slice(0, 2).toUpperCase() || "DG";
+const greeting = () => { const h = new Date().getHours(); return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening"; };
+const TEE_COLORS = { gold: "#D4A72C", black: "#111111", duncan: "#111111", championship: "#111111", blue: "#2F80ED", white: "#FFFFFF",
+  red: "#FF5A3C", green: "#2E8B57", silver: "#B8BEC5", long: "#145440" };
+const TEE_FALLBACK = ["#111111", "#2F80ED", "#FFFFFF", "#D4A72C", "#FF5A3C", "#2E8B57", "#8E44AD"];
+const teeColor = (name, i) => TEE_COLORS[name.toLowerCase()] || TEE_FALLBACK[i % TEE_FALLBACK.length];
+// a simple illustrated strip: layered fairway hills and a flag, varied per course
+function stripSVG(seed = "x", h = 86) {
+  let k = 0; for (const ch of seed) k = (k * 31 + ch.charCodeAt(0)) % 997;
+  const a = 20 + k % 30, b = 45 + k % 25, f = 60 + k % 25;
+  return `<svg class="strip" viewBox="0 0 300 ${h}" preserveAspectRatio="none" width="100%" height="${h}" aria-hidden="true">
+    <rect width="300" height="${h}" fill="#145440"/><path d="M0 ${h * .55} Q ${a * 3} ${h * .25} ${b * 3} ${h * .5} T 300 ${h * .4} V ${h} H0Z" fill="#1E6B51"/>
+    <path d="M0 ${h * .8} Q ${b * 2} ${h * .55} ${f * 3} ${h * .72} T 300 ${h * .66} V ${h} H0Z" fill="#2E8B57"/>
+    <ellipse cx="${f * 3.2}" cy="${h * .7}" rx="26" ry="7" fill="#7FC96B"/><rect x="${f * 3.2}" y="${h * .28}" width="2" height="${h * .42}" fill="#fff"/>
+    <path d="M${f * 3.2 + 2} ${h * .28} l14 4 -14 4z" fill="#C5F04A"/></svg>`;
+}
+const TAB_ICONS = {
+  home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 11 12 4l8 7v9h-5v-6H9v6H4z"/></svg>',
+  play: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 21V3"/><path d="M7 4l11 3.5L7 11" fill="currentColor"/><ellipse cx="10" cy="20.5" rx="6" ry="1.6"/></svg>',
+  practice: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r=".8" fill="currentColor"/></svg>',
+  stats: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 20V12M12 20V5M19 20v-9"/></svg>',
+};
+function tabBar(active) {
+  const t = el(`<nav class="tabs" aria-label="Main">${[["home", "Clubhouse"], ["play", "Play"], ["practice", "Practice"], ["stats", "Record"]].map(([k, l]) =>
+    `<button data-tab="${k}" class="${k === active ? "on" : ""}" ${k === active ? 'aria-current="page"' : ""}>${TAB_ICONS[k]}<span>${l.toUpperCase()}</span><i class="dot"></i></button>`).join("")}</nav>`);
+  t.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => ({ home, play: playPage, practice: practicePage, stats: statsPage })[b.dataset.tab]());
+  return t;
+}
+// a page frame with the tab bar (most screens) or without it (setup)
+function shell(where, tab = A.tab || "home", tabs = true) {
+  app.innerHTML = ""; A.where = where; if (tabs) A.tab = tab; stopMap();
+  const sc = el(`<div class="screen${tabs ? "" : " notabs"}"></div>`); app.appendChild(sc);
+  if (tabs) app.appendChild(tabBar(tab));
+  return sc;
+}
+
+// ---------------------------------------------------------------- practice sessions (saved by the practice pages)
+function practiceLogs() {
+  const out = [];
+  try { Object.keys(localStorage).filter(k => k.startsWith("driven-practice:") && k.endsWith(":log")).forEach(k => {
+    const title = k.slice("driven-practice:".length, -":log".length), entries = JSON.parse(localStorage.getItem(k) || "[]");
+    const m = A.index.find(c => c.practice && title.startsWith(c.name.split(" ")[0]));
+    entries.forEach(e => out.push({ ...e, title, url: m?.practice, course: m?.slug }));
+  }); } catch {}
+  return out.sort((a, b) => b.t - a.t);
+}
+function practiceSessions() {           // one session = one practice page on one day
+  const by = {};
+  practiceLogs().forEach(e => { const day = new Date(e.t).toDateString(), k = e.title + "|" + day;
+    (by[k] = by[k] || { title: e.title, url: e.url, t: e.t, shots: [] }).shots.push(e); });
+  return Object.values(by).sort((a, b) => b.t - a.t);
+}
+// "Your focus": one practice recommendation from the numbers already saved (simple rules, strongest signal first)
+function focusPick() {
+  const shots = practiceLogs().slice(0, 40), out = [];
+  if (shots.length >= 10) {
+    const pct = Math.round(100 * shots.filter(e => e.ft <= 6).length / shots.length);
+    const n6 = shots.filter(e => e.ft <= 6).length;
+    if (pct < 50) out.push({ w: 50 - pct, stat: `${n6}/${shots.length}`, statLabel: "inside 6 ft", title: "Chip it inside 6 feet", detail: `${pct}% of your last ${shots.length} practice chips finished inside 6 ft. Aim for half.` });
+    const short = shots.filter(e => e.along < -3).length, long = shots.filter(e => e.along > 3).length;
+    if (short > shots.length * 0.6) out.push({ w: 25, stat: `${short}/${shots.length}`, statLabel: "finished short", title: "Get chips to the hole", detail: `${short} of ${shots.length} practice chips finished short.` });
+  }
+  const holes = Store.rounds().flatMap(r => Object.values(r.holes));
+  const lv = holes.filter(h => h.leaveFt != null && h.putts >= 2).map(h => h.leaveFt);
+  if (lv.length >= 5) { const a = lv.reduce((x, y) => x + y, 0) / lv.length; if (a > 4) out.push({ w: 10 * (a - 4), stat: `${Math.round(a)} ft`, statLabel: "average leave", title: "Lag putting", detail: `Your first putts leave ${Math.round(a)} ft on average. Get them inside 3 ft.` }); }
+  const pp = holes.filter(h => h.putts != null).map(h => h.putts);
+  if (pp.length >= 9) { const a = pp.reduce((x, y) => x + y, 0) / pp.length; if (a > 2) out.push({ w: 20 * (a - 2), stat: a.toFixed(1), statLabel: "putts per hole", title: "Putting", detail: `${a.toFixed(1)} putts per hole over your last ${pp.length} holes.` }); }
+  return out.sort((a, b) => b.w - a.w)[0] || { stat: "–", statLabel: "", title: "Play or practice to get a focus", detail: "Log a round or a practice session, and your top thing to work on shows up here." };
+}
+
+// ---------------------------------------------------------------- Home
+const focusHTML = fc => `<div class="card focus" id="focus"><div style="text-align:center;min-width:76px"><div class="bigstat">${esc(fc.stat || "–")}</div><div class="caps" style="font-size:9.5px;color:var(--claret);margin-top:4px">${esc(fc.statLabel || "")}</div></div>
+  <div style="border-left:1px solid var(--rule);padding-left:16px"><b>${esc(fc.title)}</b><small>${esc(fc.detail)}</small></div></div>`;
+// the courses as a ruled list grouped by club
+function clubList(container) {
+  const clubs = [...new Set(A.index.map(c => c.name))].map(name => ({ name, courses: A.index.filter(c => c.name === name) }));
+  clubs.forEach(club => {
+    const one = club.courses.length === 1, c0 = club.courses[0];
+    if (one) { const it = el(`<div class="item"><div class="grow"><b>${esc(club.name)}</b><small>${esc(c0.course)} · ${esc(c0.city)}</small></div><span>›</span></div>`);
+      it.onclick = () => coursePage(c0.slug); container.appendChild(it); return; }
+    container.appendChild(el(`<div class="item" style="cursor:default"><div class="grow"><b>${esc(club.name)}</b><small>${esc(c0.city)}</small></div></div>`));
+    club.courses.forEach(c => { const sub = el(`<div class="item sub"><div class="grow"><b style="font-size:15px">${esc(c.course)}</b></div><span>›</span></div>`);
+      sub.onclick = () => coursePage(c.slug); container.appendChild(sub); });
+  });
+}
 async function home() {
   if (!A.index.length) await loadIndex();
-  const b = screen("Driven Golf", null, "");
-  // me: name and handicap index (typed in from GHIN), with a nudge to refresh it after about two weeks
-  const pr = A.profile, age = daysSince(pr.hcpDate);
-  const me = el(`<div class="card me"><div class="item" style="padding:0"><div class="grow"><b>${pr.name ? esc(pr.name) : "Set up your Player Profile"}</b>
-    <small>${pr.hcp !== "" && pr.hcp != null ? `Handicap index ${esc(pr.hcp)}` : "Name, handicap index, home course and My Bag"}</small></div><span>›</span></div>
-    ${age != null && age >= 14 ? `<div class="warn">Your index was last updated ${age} days ago. <a href="https://www.ghin.com/" target="_blank" rel="noopener">Look up on GHIN</a>, then update it in your profile.</div>` : ""}</div>`);
-  $(".item", me).onclick = profilePage; b.appendChild(me);
+  const sc = shell({ screen: "Clubhouse" }, "home"), pr = A.profile, age = daysSince(pr.hcpDate);
+  // today's round: a plan I haven't played yet, else my last round, else my home course
+  const lastR = Store.rounds().sort((a, b) => b.date - a.date)[0], lastP = Store.plans().sort((a, b) => b.created - a.created)[0];
+  let next;
+  if (lastP && (!lastR || lastP.created > lastR.date) && meta(lastP.course).name) next = { slug: lastP.course, tees: lastP.tees, why: `Planned · ${lastP.name}` };
+  else if (lastR && meta(lastR.course).name) next = { slug: lastR.course, tees: lastR.tees, why: "Last played" };
+  else { const slug = pr.homeCourse || A.index[0].slug, c = await loadCourse(slug); next = { slug, tees: pr.prefTees?.[slug] || c.teeOrder[0], why: "Your home course" }; }
+  const nm = meta(next.slug), hc = pr.homeCourse ? meta(pr.homeCourse) : null;
+  sc.appendChild(el(`<div class="hero"><div class="top">${CREST(34)}<div class="grow">${WORDMARK}</div>${feedbackLink()}<button class="avatar" id="av" aria-label="Member Profile">${esc(initials(pr.name))}</button></div>
+    <div class="caps eyebrow">The Clubhouse</div>
+    <h1>${greeting()}${pr.name ? `, ${esc(pr.name.split(" ")[0])}` : ""}.</h1>
+    <div class="caps hcpline">${pr.hcp !== "" && pr.hcp != null ? `Handicap ${esc(pr.hcp)}` : "Handicap —"}${hc ? ` · ${esc(hc.name)}` : ""}</div></div>`));
+  $("#av", sc).onclick = profilePage;
+  const b = el(`<div class="body"></div>`); sc.appendChild(b);
+  b.appendChild(el(`<h2>Today's round</h2>`));
+  const nu = el(`<div class="card nextup"><div class="muted it">${esc(next.why)}</div><div class="cname">${esc(nm.name)}</div>
+    <div class="muted">${esc(nm.course)} · ${esc(next.tees)} tees</div>
+    <button class="btn" id="go">Tee off</button>
+    <div class="split"><button class="linkbtn" id="pl">Plan a round</button><button class="linkbtn" id="pr">Practice</button></div></div>`);
+  $("#go", nu).onclick = () => startRound(next.slug, next.tees);
+  $("#pl", nu).onclick = planWizard;
+  $("#pr", nu).onclick = () => nm.practice ? (location.href = nm.practice) : practicePage();
+  b.appendChild(nu);
+  if (age != null && age >= 14) b.appendChild(el(`<div class="warn">Your index was last updated ${age} days ago. <a href="https://www.ghin.com/" target="_blank" rel="noopener">Look up on GHIN</a>, then update it in your profile.</div>`));
   const lastEx = daysSince(Store.get("lastExport", null));
   if (Store.rounds().length && (lastEx == null || lastEx >= 30)) {
     const bk = el(`<div class="warn">Back up your rounds: ${lastEx == null ? "you haven't exported yet" : `last backup ${lastEx} days ago`}. <button class="linkbtn" id="bk">Export my data</button></div>`);
     $("#bk", bk).onclick = exportData; b.appendChild(bk);
   }
-  const pl = el(`<button class="btn">Plan a round</button>`); pl.onclick = planWizard; b.appendChild(pl);
-  // courses grouped by club: club -> its courses -> (course page) tees. Search matches either name.
+  b.appendChild(el(`<h2>From the practice tee</h2>`));
+  const fo = el(focusHTML(focusPick())); fo.onclick = practicePage; b.appendChild(fo);
+  b.appendChild(el(`<h2>The courses</h2>`));
+  const cl = el(`<div class="list"></div>`); clubList(cl); b.appendChild(cl);
+  b.appendChild(el(`<h2>Recent</h2>`));
+  const items = Store.rounds().map(r => ({ t: r.date, kind: "r", r })).concat(practiceSessions().map(p => ({ t: p.t, kind: "p", p }))).sort((a, b) => b.t - a.t).slice(0, 6);
+  const rl = el(`<div class="list"></div>`);
+  if (!items.length) rl.appendChild(el(`<p class="muted it">No rounds or practice yet.</p>`));
+  items.forEach(x => {
+    if (x.kind === "r") { const r = x.r, tot = Object.values(r.holes).reduce((s2, h) => s2 + (h.score || 0), 0);
+      const it = el(`<div class="item"><div class="grow"><b>${esc(meta(r.course).name || r.course)}</b><small>Round · ${esc(meta(r.course).course || "")} · ${new Date(r.date).toLocaleDateString()} · ${esc(r.tees)} tees</small></div><b class="num" style="font:300 22px var(--head)">${tot || "–"}</b><span>›</span></div>`);
+      it.onclick = () => roundSummary(r.id); rl.appendChild(it);
+    } else { const p = x.p, in6 = p.shots.filter(e => e.ft <= 6).length;
+      const it = el(`<div class="item"><div class="grow"><b>${esc(p.title)}</b><small>Practice · ${new Date(p.t).toLocaleDateString()} · ${p.shots.length} shots, ${in6} inside 6 ft</small></div><span>›</span></div>`);
+      it.onclick = () => { if (p.url) location.href = p.url; }; rl.appendChild(it); }
+  });
+  b.appendChild(rl);
+}
+
+// ---------------------------------------------------------------- Play: plan, or find a club / course
+async function playPage() {
+  if (!A.index.length) await loadIndex();
+  const b = screen("Play", null, "", {}, { tab: "play" });
+  const pl = el(`<button class="btn go">Plan a round</button>`); pl.onclick = planWizard; b.appendChild(pl);
   b.appendChild(el(`<h2>Courses</h2>`));
   const search = el(`<input type="search" placeholder="Search clubs or courses" aria-label="Search clubs or courses">`);
   const list = el(`<div class="card list"></div>`);
@@ -243,53 +387,107 @@ async function home() {
     if (!shown) list.appendChild(el(`<p class="muted">No club or course matches “${esc(search.value)}”.</p>`));
   }
   search.oninput = drawCourses; drawCourses();
+}
+
+// ---------------------------------------------------------------- Practice: the practice areas and recent sessions
+async function practicePage() {
+  if (!A.index.length) await loadIndex();
+  const b = screen("Practice", null, "", {}, { tab: "practice" });
+  b.appendChild(el(`<h2>From the practice tee</h2>`)); b.appendChild(el(focusHTML(focusPick())));
+  b.appendChild(el(`<h2>Practice areas</h2>`));
+  const seen = new Set(), list = el(`<div class="list"></div>`);
+  A.index.filter(c => c.practice && !seen.has(c.practice) && seen.add(c.practice)).forEach(c => {
+    const n = practiceLogs().filter(e => e.url === c.practice).length;
+    list.appendChild(el(`<a class="item" style="text-decoration:none;color:inherit" href="${esc(c.practice)}"><div class="grow"><b>${esc(c.name)}</b><small>Short-game area · ${esc(c.city)}${n ? ` · ${n} shots logged` : ""}</small></div><span>›</span></a>`));
+  });
+  b.appendChild(list);
+  b.appendChild(el(`<h2>Recent sessions</h2>`));
+  const rs = el(`<div class="list"></div>`), ses = practiceSessions().slice(0, 10);
+  if (!ses.length) rs.appendChild(el(`<p>No practice logged yet. Open a practice area, place your ball, hit, then Mark finish.</p>`));
+  ses.forEach(p => { const in6 = p.shots.filter(e => e.ft <= 6).length, avg = Math.round(p.shots.reduce((a, e) => a + e.ft, 0) / p.shots.length);
+    const it = el(`<div class="item"><div class="grow"><b>${esc(p.title)}</b><small>${new Date(p.t).toLocaleDateString()} · ${p.shots.length} shots · average ${avg} ft left · ${in6} inside 6 ft</small></div><span>›</span></div>`);
+    it.onclick = () => { if (p.url) location.href = p.url; }; rs.appendChild(it); });
+  b.appendChild(rs);
+}
+
+// ---------------------------------------------------------------- Stats: rounds (filtered per course group) and putting
+async function statsPage() {
+  if (!A.index.length) await loadIndex();
+  const b = screen("Record", null, "", {}, { tab: "stats" });
   const groups = ["All", ...new Set(A.index.map(c => c.group))];
   let gsel = Store.get("roundFilter", "All"); if (!groups.includes(gsel)) gsel = "All";
-  const rounds = Store.rounds().sort((a, b) => b.date - a.date).filter(r => gsel === "All" || meta(r.course).group === gsel);
-  b.appendChild(el(`<h2>Rounds</h2>`));
+  const rounds = Store.rounds().sort((a, b2) => b2.date - a.date).filter(r => gsel === "All" || meta(r.course).group === gsel);
   const fl = el(`<div class="chips">${groups.map(g => `<button class="chip${g === gsel ? " on" : ""}" data-g="${esc(g)}">${g === "18" ? "Full courses" : esc(g)}</button>`).join("")}</div>`);
-  fl.querySelectorAll("[data-g]").forEach(x => x.onclick = () => { Store.set("roundFilter", x.dataset.g); home(); });
+  fl.querySelectorAll("[data-g]").forEach(x => x.onclick = () => { Store.set("roundFilter", x.dataset.g); statsPage(); });
   b.appendChild(fl);
+  const holes = rounds.flatMap(r => Object.values(r.holes)), avg = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+  const pp = holes.filter(h => h.putts != null).map(h => h.putts), fp = holes.filter(h => h.firstPuttFt != null).map(h => h.firstPuttFt), lv = holes.filter(h => h.leaveFt != null && h.putts >= 2).map(h => h.leaveFt);
+  const ps = practiceLogs(), in6 = ps.length ? Math.round(100 * ps.filter(e => e.ft <= 6).length / ps.length) : null;
+  b.appendChild(el(`<div class="card"><div class="stat">
+    <div><b>${rounds.length}</b><span>rounds${gsel !== "All" ? ` (${gsel === "18" ? "full courses" : esc(gsel)})` : ""}</span></div>
+    <div><b>${avg(pp) != null ? avg(pp).toFixed(1) : "–"}</b><span>putts per hole</span></div>
+    <div><b>${avg(fp) != null ? Math.round(avg(fp)) + " ft" : "–"}</b><span>average first putt</span></div>
+    <div><b>${avg(lv) != null ? Math.round(avg(lv)) + " ft" : "–"}</b><span>first-putt leave</span></div>
+    <div><b>${in6 != null ? in6 + "%" : "–"}</b><span>practice chips inside 6 ft</span></div></div></div>`));
+  b.appendChild(el(`<h2>Rounds</h2>`));
   const rl = el(`<div class="card list"></div>`);
-  if (!rounds.length) rl.appendChild(el(`<p>No rounds here yet. Pick a course, then Start a round.</p>`));
+  if (!rounds.length) rl.appendChild(el(`<p>No rounds here yet. Pick a course on Play, then Start a round.</p>`));
   rounds.slice(0, 30).forEach(r => {
-    const tot = Object.values(r.holes).reduce((s, h) => s + (h.score || 0), 0);
-    const it = el(`<div class="item"><div class="grow"><b>${esc(meta(r.course).name || r.course)}</b><small>${esc(meta(r.course).course || "")} · ${new Date(r.date).toLocaleDateString()} · ${esc(r.tees)} tees${r.planId ? " · with plan" : ""}</small></div><b class="num">${tot || "–"}</b></div>`);
+    const tot = Object.values(r.holes).reduce((s2, h) => s2 + (h.score || 0), 0);
+    const it = el(`<div class="item"><div class="grow"><b>${esc(meta(r.course).name || r.course)}</b><small>${esc(meta(r.course).course || "")} · ${new Date(r.date).toLocaleDateString()} · ${esc(r.tees)} tees${r.planId ? " · with plan" : ""}</small></div><b class="num">${tot || "–"}</b><span>›</span></div>`);
     it.onclick = () => roundSummary(r.id); rl.appendChild(it);
   });
   b.appendChild(rl);
-  const st = el(`<button class="btn alt">Player Profile and My Bag</button>`); st.onclick = profilePage; b.appendChild(st);
 }
 
+// ---------------------------------------------------------------- course page
 async function coursePage(slug) {
   const course = await loadCourse(slug); const m = meta(slug);
-  const b = screen(m.name, home, "", { course: slug });
+  const sc = shell({ screen: "Course", course: slug });
   const prefTee = A.settings.prefTees?.[slug];
   let tee = [prefTee, Store.get("lastTee:" + slug, null), course.teeOrder[0]].find(t => t && course.teeOrder.includes(t));
-  const card = el(`<div class="card"><h3>${esc(m.course)}</h3><p>${esc(m.city)} · par ${course.par.reduce((a, c) => a + c, 0)}${m.elevationFt != null ? ` · ${m.elevationFt.toLocaleString()} ft elevation` : ""}</p>
-    <div class="muted">Tees</div><div class="chips" id="tees"></div><div class="muted" id="teeYd"></div>
-    ${m.unconfirmedTees ? '<div class="warn">These yardages are measured from the map, not the scorecard. Check them against the card at the course.</div>' : ""}
-    ${m.teeShots === "shortgame" ? '<div class="muted">Tee shots here count as short-game shots in your stats.</div>' : m.teeShots === "approach" ? '<div class="muted">Par-3 tee shots here count as approach shots in your stats.</div>' : ""}
-    <div class="row"><button class="btn" id="startRound">Start a round</button><button class="btn alt" id="plan">Plan a round</button></div>
-    <div class="row"><button class="btn alt" id="browse">Browse holes</button>${m.practice ? `<a class="btn alt" style="text-align:center;text-decoration:none" href="${esc(m.practice)}">Practice area</a>` : ""}</div></div>`);
-  b.appendChild(card);
+  const [city, st] = m.city.split(",").map(x => x.trim());
+  sc.appendChild(el(`<div class="chead"><div style="display:flex;align-items:center;gap:10px"><button class="iconbtn" id="bk" aria-label="Back">‹</button><span style="flex:1"></span>${feedbackLink()}${CREST(26)}</div>
+    <h1>${esc(m.name)}</h1><div class="caps sub2">${esc(city)}${st ? `, ${esc(st)}` : ""} · Par ${course.par.reduce((a, c) => a + c, 0)}${m.course && !/^Championship|^18 holes/.test(m.course) ? ` · ${esc(m.course)}` : ""}</div></div>`));
+  $("#bk", sc).onclick = () => (A.tab === "play" ? playPage() : home());
+  const b = el(`<div class="body"></div>`); sc.appendChild(b);
+  b.appendChild(el(`<h2>Select your tees</h2>`));
+  const tc = el(`<div class="card" style="padding:6px"><table class="teetable"></table></div>`); b.appendChild(tc);
+  const strip = el(`<div class="tablewrap"></div>`); b.appendChild(strip);
+  const dock = el(`<div class="dock"><button class="btn" id="startRound"></button></div>`);
   const drawTees = () => {
-    const box = $("#tees", card); box.innerHTML = "";
-    course.teeOrder.forEach(t => { const c = el(`<button class="chip${t === tee ? " on" : ""}">${esc(t)}</button>`);
-      c.onclick = () => { tee = t; Store.set("lastTee:" + slug, t); drawTees(); }; box.appendChild(c); });
-    $("#teeYd", card).textContent = `${course.tees[tee].reduce((a, c) => a + c, 0).toLocaleString()} yards from the ${tee} tees`;
+    const box = $(".teetable", tc); box.innerHTML = "";
+    course.teeOrder.forEach((t, i) => { const r = el(`<tr class="${t === tee ? "on" : ""}" aria-selected="${t === tee}"><td style="width:28px"><span class="sq" style="background:${teeColor(t, i)}"></span></td>
+      <td class="tn">${esc(t)}${t === prefTee ? "<i>your tees</i>" : ""}</td><td class="yd">${course.tees[t].reduce((a, c) => a + c, 0).toLocaleString()}</td></tr>`);
+      r.onclick = () => { tee = t; Store.set("lastTee:" + slug, t); drawTees(); }; box.appendChild(r); });
+    // front nine from the selected tees
+    const nine = course.holes.slice(0, 9), y = nine.map(h => course.tees[tee][h.n - 1]), pr = nine.map(h => h.par);
+    strip.innerHTML = `<table class="scorecard"><tr><th>Hole</th>${nine.map(h => `<th>${h.n}</th>`).join("")}<th>Out</th></tr>
+      <tr><td>Yds</td>${y.map(v => `<td>${v}</td>`).join("")}<td class="out">${y.reduce((a, c) => a + c, 0).toLocaleString()}</td></tr>
+      <tr><td>Par</td>${pr.map(v => `<td>${v}</td>`).join("")}<td class="out">${pr.reduce((a, c) => a + c, 0)}</td></tr></table>`;
+    $("#startRound", dock).textContent = `Tee off from the ${tee} tees`;
   };
+  const nav = el(`<div class="list">
+    <div class="navrow" id="plan"><div class="grow"><b>Plan this round</b><small>Targets, clubs and a planned score</small></div><span>›</span></div>
+    <div class="navrow" id="browse"><div class="grow"><b>The yardage book</b><small>Every hole: yardages, hazards and greens</small></div><span>›</span></div>
+    ${m.practice ? `<a class="navrow" style="text-decoration:none;color:inherit" href="${esc(m.practice)}"><div class="grow"><b>Practice area</b><small>Short-game greens</small></div><span>›</span></a>` : ""}</div>`);
+  b.appendChild(nav);
+  if (m.unconfirmedTees) b.appendChild(el('<div class="warn">These yardages are measured from the map, not the scorecard. Check them against the card at the course.</div>'));
+  if (m.teeShots === "shortgame") b.appendChild(el('<div class="muted it">Tee shots here count as short-game shots in your record.</div>'));
+  else if (m.teeShots === "approach") b.appendChild(el('<div class="muted it">Par-3 tee shots here count as approach shots in your record.</div>'));
   drawTees();
-  $("#startRound", card).onclick = () => startRound(slug, tee);
-  $("#plan", card).onclick = () => newPlan(slug, tee);
-  $("#browse", card).onclick = () => holeView({ mode: "browse", slug, tees: tee, n: 1, pins: {} });
-  const plans = Store.plans().filter(p => p.course === slug).sort((a, b) => b.created - a.created);
+  $("#startRound", dock).onclick = () => startRound(slug, tee);
+  $("#plan", nav).onclick = () => newPlan(slug, tee);
+  $("#browse", nav).onclick = () => holeView({ mode: "browse", slug, tees: tee, n: 1, pins: {} });
+  const plans = Store.plans().filter(p => p.course === slug).sort((a, b2) => b2.created - a.created);
   b.appendChild(el(`<h2>Plans</h2>`));
-  const pl = el(`<div class="card list"></div>`);
-  if (!plans.length) pl.appendChild(el(`<p>No plans yet for this course.</p>`));
+  const pl = el(`<div class="list"></div>`);
+  if (!plans.length) pl.appendChild(el(`<p class="muted it">No plans yet for this course.</p>`));
   plans.forEach(p => { const it = el(`<div class="item"><div class="grow"><b>${esc(p.name)}</b><small>${esc(p.tees)} tees · planned ${planTotal(p) || "–"}</small></div><span>›</span></div>`);
     it.onclick = () => planSummary(p.id); pl.appendChild(it); });
   b.appendChild(pl);
+  b.appendChild(el(`<div style="height:70px"></div>`));
+  sc.appendChild(dock);
 }
 
 // Plan a round: club -> course (when the club has more than one) -> tees (my preferred tees first) -> hole-by-hole plan
@@ -363,7 +561,7 @@ function setupWizard() {
   let bag = Store.bag(); bag = bag.length ? JSON.parse(JSON.stringify(bag)) : Store.starterBag();
   const steps = ["name", "course", "tees", "bag"];
   const go = async i => {
-    const b = screen(`Welcome · step ${i + 1} of ${steps.length}`, i ? () => go(i - 1) : null, "");
+    const b = screen(`Welcome · step ${i + 1} of ${steps.length}`, i ? () => go(i - 1) : null, "", {}, { tabs: false });
     const card = el(`<div class="card"></div>`); b.appendChild(card);
     const next = el(`<button class="btn">${i === steps.length - 1 ? "Finish" : "Next"}</button>`);
     const step = steps[i];
@@ -432,7 +630,8 @@ function importData() {
   inp.onchange = async () => {
     let file; try { file = JSON.parse(await inp.files[0].text()); if (file.app !== "Driven Golf") throw 0; } catch { return toast("That isn't a Driven Golf backup file."); }
     const n = k => Array.isArray(file.data[k]) ? file.data[k].length : 0;
-    const md = modal(`<h3 style="margin:0">Restore this backup?</h3><p>From ${new Date(file.exportedAt).toLocaleString()} (version ${esc(file.appVersion)}): ${n("rounds")} rounds, ${n("plans")} plans, profile and bag.</p>
+    const ps = Object.values(file.practice || {}).reduce((t, v) => t + (Array.isArray(v) ? v.length : 0), 0);
+    const md = modal(`<h3 style="margin:0">Restore this backup?</h3><p>From ${new Date(file.exportedAt).toLocaleString()} (version ${esc(file.appVersion)}): ${n("rounds")} rounds, ${n("plans")} plans, ${ps} practice shots, profile and bag.</p>
       <p class="warn">This replaces what's on this phone now. A copy of the current data is kept, just in case.</p><div class="row"><button class="btn alt" id="no">Cancel</button><button class="btn" id="yes">Restore</button></div>`);
     $("#no", md).onclick = () => md.remove();
     $("#yes", md).onclick = () => { try { Store.importAll(file); md.remove(); toast("Restored"); setTimeout(() => location.reload(), 600); } catch (e) { toast(e.message); } };
@@ -440,9 +639,9 @@ function importData() {
   inp.click();
 }
 
-function profilePage() {
+function profileEdit(section) {
   const p = Store.profile(); let bag = JSON.parse(JSON.stringify(Store.bag()));
-  const b = screen("Player Profile", home, "");
+  const b = screen(section === "bag" ? "Edit clubs" : "Edit profile", profilePage, "", { screen: "Member Profile" });
   const age = daysSince(p.hcpDate);
   const prof = el(`<div class="card"><h3>You</h3>
     <label class="f">Name<input id="pn" value="${esc(p.name)}" autocomplete="name"></label>
@@ -516,7 +715,7 @@ function profilePage() {
     bag = bag.filter(c => c.name);
     Store.saveProfile(p); Store.saveBag(bag);
     A.profile = Store.profile(); A.bag = Store.bag(); A.settings = Store.settings();
-    toast("Profile saved"); home();
+    toast("Profile saved"); profilePage();
   };
   const last = daysSince(Store.get("lastExport", null));
   const data = el(`<div class="card"><h3>Your data</h3><p class="muted" style="margin:0">Everything is saved on this phone only. Export a backup about once a month${last == null ? " (no backup yet)" : ` (last one ${last} day${last === 1 ? "" : "s"} ago)`}: it holds your rounds, plans, pins, profile and bag in one file you can text, email or AirDrop to yourself.</p>
@@ -524,6 +723,31 @@ function profilePage() {
     <p class="muted" style="margin:0">Driven Golf ${APP_VERSION}</p></div>`);
   $("#ex", data).onclick = exportData; $("#im", data).onclick = importData;
   b.append(prof, bagCard, pt, save, data);
+  if (section === "bag") requestAnimationFrame(() => bagCard.scrollIntoView({ block: "start" }));
+}
+
+// Member Profile (the only way in: the initials button on the Clubhouse)
+function profilePage() {
+  const p = A.profile, b = screen("Member Profile", home, ""), hc = p.homeCourse ? meta(p.homeCourse) : null, age = daysSince(p.hcpDate);
+  const card = el(`<div class="member"><div style="display:flex;align-items:flex-start;gap:12px"><div style="flex:1"><div class="caps brass">Driven Golf · Member</div>
+    <div class="mname">${esc(p.name || "Your name")}</div><div class="msub">${[hc ? hc.name : null, p.hand === "L" ? "left-handed" : "right-handed", `${(p.homeElevationFt || 0).toLocaleString()} ft`].filter(Boolean).map(esc).join(" · ")}</div></div>${CREST(44)}</div>
+    <div class="divider"></div><div class="caps brass">Handicap index</div><div class="ix">${p.hcp !== "" && p.hcp != null ? esc(p.hcp) : "—"}</div>
+    <div class="msub">${p.ghin ? `GHIN ${esc(p.ghin)}` : "No GHIN number yet"}${p.hcpDate ? ` · updated ${new Date(p.hcpDate).toLocaleDateString()}` : ""}${age >= 14 ? ` · ${age} days ago` : ""}</div>
+    <div class="row"><a class="btn alt" href="https://www.ghin.com/" target="_blank" rel="noopener" style="text-align:center;text-decoration:none;display:grid;place-items:center">Look up on GHIN</a><button class="btn alt" id="ed">Edit profile</button></div></div>`);
+  $("#ed", card).onclick = () => profileEdit("profile"); b.appendChild(card);
+  b.appendChild(el(`<h2>My bag</h2>`));
+  const bag = A.bag.filter(c => c.carry > 0);
+  const tbl = el(`<div class="tablewrap"><table class="bagtbl"><tr><th>Club</th><th>Carry</th><th>Total</th><th>Roll</th><th>Tee</th></tr>
+    ${bag.map(c => `<tr><td>${esc(c.name)}</td><td>${c.carry}</td><td>${c.total ?? "–"}</td><td>${c.total ? c.total - c.carry : "–"}</td><td>${c.tee ? '<i class="tdot" title="Tee club"></i>' : ""}</td></tr>`).join("")}
+    ${bag.length ? "" : '<tr><td colspan="5" class="muted">No clubs yet. Tap Edit clubs to add your distances.</td></tr>'}</table></div>`);
+  b.appendChild(tbl);
+  const notes = bagWarnings(A.bag);
+  if (notes.length) b.appendChild(el(`<div>${notes.map(t => `<div class="gapnote">${esc(t)}</div>`).join("")}</div>`));
+  const last = daysSince(Store.get("lastExport", null));
+  const acts = el(`<div class="row"><button class="btn alt" id="ec">Edit clubs</button><button class="btn alt" id="ex">Export data</button></div>`);
+  $("#ec", acts).onclick = () => profileEdit("bag"); $("#ex", acts).onclick = exportData; b.appendChild(acts);
+  const data = el(`<p class="muted it" style="margin:0">Saved on this phone only. Export a backup about once a month${last == null ? " (no backup yet)" : ` (last one ${last} day${last === 1 ? "" : "s"} ago)`}. <button class="linkbtn" id="im">Import data</button> · Driven Golf ${APP_VERSION}</p>`);
+  $("#im", data).onclick = importData; b.appendChild(data);
 }
 
 // ---------------------------------------------------------------- rounds & plans: create
@@ -568,37 +792,55 @@ function makeMap(container) {
   map.getPane("aerial").style.pointerEvents = "none"; map.getPane("fills").style.pointerEvents = "none";
   return map;
 }
-const FILL = { rough: "#b9d99a", fairway: "#7ccf5e", green: "#3fbf4f", tee_box: "#5fbf6a", bunker: "#f1e1a6", water: "#5aa9e6", trees: "#2f6b34" };
+// the drawn map, like a caddie's yardage book: paper, soft greens, ivory bunkers with dashed brass edges, lake water,
+// trees as hunter-outlined circles. Hazard outlines show in both views; on the aerial they stay light so they read.
+const FILL = { rough: "#C9D3AE", fairway: "#DCE4C3", green: "#BFD49A", tee_box: "#DCE4C3", bunker: "#F6F1E4", water: "#A9C2D3" };
+const EDGE = { green: { color: "#1E3A2B", weight: 1 }, bunker: { color: "#B08D57", weight: 1.2, dashArray: "3 3" }, water: { color: "#3E6E8E", weight: 1.2 } };
+function treeDots(f, g) {                     // a woods outline drawn as a scatter of small outlined circles
+  const ring = Geo.ringsOf(f.geometry)[0]; if (!ring) return;
+  const o = ring[0], xs = ring.map(p => Geo.xy(p, o)), minx = Math.min(...xs.map(q => q[0])), maxx = Math.max(...xs.map(q => q[0])), miny = Math.min(...xs.map(q => q[1])), maxy = Math.max(...xs.map(q => q[1]));
+  let n = 0;
+  for (let y = miny + 3; y < maxy && n < 60; y += 7) for (let x = minx + 3 + ((Math.round(y / 7) % 2) * 3.5); x < maxx && n < 60; x += 7) {
+    const p = Geo.ll([x, y], o); if (!Geo.inside(p, f.geometry)) continue; n++;
+    L.circle(p, { radius: 3, pane: "fills", interactive: false, color: "#1E3A2B", weight: .8, fillColor: "#C9D3AE", fillOpacity: 1 }).addTo(g);
+  }
+  if (!n) { const c = ring.reduce((a, q) => [a[0] + q[0] / ring.length, a[1] + q[1] / ring.length], [0, 0]); L.circle(c, { radius: 3, pane: "fills", interactive: false, color: "#1E3A2B", weight: .8, fillColor: "#C9D3AE", fillOpacity: 1 }).addTo(g); }
+}
 function drawFeatures(map, feats, base, opts = {}) {
   const g = L.layerGroup();
   const order = ["rough", "trees", "fairway", "tee_box", "water", "bunker", "green"];
   if (base === "map") {
-    feats.filter(f => FILL[f.properties.kind]).sort((a, b) => order.indexOf(a.properties.kind) - order.indexOf(b.properties.kind))
-      .forEach(f => L.geoJSON(f, { pane: "fills", interactive: false, style: { stroke: true, color: "#00000025", weight: .6, fillColor: FILL[f.properties.kind], fillOpacity: 1 } }).addTo(g));
+    feats.filter(f => FILL[f.properties.kind] || f.properties.kind === "trees").sort((a, b) => order.indexOf(a.properties.kind) - order.indexOf(b.properties.kind)).forEach(f => {
+      const k = f.properties.kind;
+      if (k === "trees") return treeDots(f, g);
+      L.geoJSON(f, { pane: "fills", interactive: false, style: { stroke: true, color: "#00000014", weight: .5, ...(EDGE[k] || {}), fillColor: FILL[k], fillOpacity: 1 } }).addTo(g);
+    });
   } else {
     feats.filter(f => ["green", "fairway"].includes(f.properties.kind)).forEach(f =>
-      L.geoJSON(f, { pane: "hz", interactive: false, style: { color: "#ffffff", weight: 1, opacity: .55, fill: false } }).addTo(g));
+      L.geoJSON(f, { pane: "hz", interactive: false, style: { color: "#FFFDF7", weight: 1, opacity: .6, fill: false } }).addTo(g));
   }
-  // hazard outlines on top in both views (on the photo they mark what to avoid)
+  // hazard outlines on top in both views
+  const M = base === "map";
   feats.forEach(f => {
     const k = f.properties.kind, sel = opts.selected === f.properties.id;
     let st = null;
-    if (k === "water") st = { color: f.properties.sub === "lateral" ? "#c62828" : "#1f6fd1", weight: 2.2, fillColor: "#5aa9e6", fillOpacity: base === "map" ? 0 : .25 };
-    else if (k === "bunker" && base !== "map") st = { color: "#f6e3a1", weight: 1.6, fill: false };
-    else if (k === "ob_area") st = { color: "#ffffff", weight: 2, dashArray: "6 5", fillColor: "#ffffff", fillOpacity: .18 };
-    else if (k === "fence" || k === "ob_line") st = { color: "#ffffff", weight: 3, dashArray: "8 6", fill: false };
-    else if (k === "avoid") st = { color: f.properties.color === "red" ? "#c62828" : "#e0a800", weight: 2.5, fillColor: f.properties.color === "red" ? "#c62828" : "#e0a800", fillOpacity: .22 };
-    else if (k === "trees" && base !== "map") st = null;
-    if (sel) st = { ...(st || {}), color: "#ff4fd8", weight: 4, fill: true, fillColor: "#ff4fd8", fillOpacity: .2 };
+    if (k === "water") st = { color: f.properties.sub === "lateral" ? "#7A1F2B" : M ? "#3E6E8E" : "#A9C2D3", weight: M ? 1.4 : 2.2, fillColor: "#A9C2D3", fillOpacity: M ? 0 : .25 };
+    else if (k === "bunker" && !M) st = { color: "#F6F1E4", weight: 1.6, fill: false };
+    else if (k === "ob_area") st = { color: M ? "#7A1F2B" : "#FFFFFF", weight: 1.6, dashArray: "6 5", fillColor: M ? "#7A1F2B" : "#FFFFFF", fillOpacity: .08 };
+    else if (k === "fence" || k === "ob_line") st = { color: M ? "#7A1F2B" : "#FFFFFF", weight: M ? 1.8 : 3, dashArray: "8 6", fill: false };
+    else if (k === "avoid") st = { color: f.properties.color === "red" ? "#7A1F2B" : "#A8862F", weight: 2, fillColor: f.properties.color === "red" ? "#7A1F2B" : "#A8862F", fillOpacity: .16 };
+    if (sel) st = { ...(st || {}), color: "#7A1F2B", weight: 4, fill: true, fillColor: "#7A1F2B", fillOpacity: .2 };
     if (st) L.geoJSON(f, { pane: "hz", interactive: !!opts.onSelect, style: st }).on("click", () => opts.onSelect && opts.onSelect(f)).addTo(g);
   });
   return g;
 }
 const pinIcon = (moved) => L.divIcon({ className: "", iconSize: [30, 30], iconAnchor: [4, 28],
-  html: `<div class="pinm"><svg width="26" height="30" viewBox="0 0 26 30"><line x1="4" y1="2" x2="4" y2="29" stroke="#fff" stroke-width="2.5"/><path d="M5 3 L23 8 L5 13 Z" fill="${moved ? "#d6452f" : "#ffd27a"}" stroke="#16231a" stroke-width="1"/><circle cx="4" cy="28" r="2.5" fill="#16231a"/></svg></div>` });
+  html: `<div class="pinm"><svg width="26" height="30" viewBox="0 0 26 30"><line x1="4" y1="2" x2="4" y2="29" stroke="#1B1B18" stroke-width="2"/><path d="M5 3 L23 8 L5 13 Z" fill="#7A1F2B" stroke="#FFFDF7" stroke-width="1"/><circle cx="4" cy="28" r="2.5" fill="#1B1B18"/></svg></div>` });
 const ballIcon = L.divIcon({ className: "", iconSize: [16, 16], html: '<div class="ballm"></div>' });
-const tgtIcon = (t, plan) => L.divIcon({ className: "", iconSize: [26, 26], html: `<div class="tgt${plan ? " plan" : ""}">${esc(t)}</div>` });
-const teeIcon = L.divIcon({ className: "", iconSize: [14, 14], html: '<div style="width:14px;height:14px;border-radius:3px;background:#fff;border:2px solid #16231a"></div>' });
+// planned targets: lime rings labelled with the distance and club, e.g. "192 · 5W"
+const clubAbbr = c => !c ? "" : /driver/i.test(c) ? "Dr" : c.replace(/^(\d+)\s*wood$/i, "$1W").replace(/^(\d+)\s*iron$/i, "$1i").replace(/^(\d+)\s*hybrid$/i, "$1H");
+const tgtIcon = (t, plan, label) => L.divIcon({ className: "", iconSize: [30, 30], iconAnchor: [15, 15], html: `<div class="tgt${plan ? " plan" : ""}">${esc(t)}</div>${label ? `<span class="tgtlbl">${esc(label)}</span>` : ""}` });
+const teeIcon = L.divIcon({ className: "", iconSize: [14, 14], html: '<div style="width:14px;height:14px;background:#F6F1E4;border:2px solid #1E3A2B"></div>' });
 
 // magnifier (loupe): a round zoomed view of the aerial shown above the finger; one shared loupe for the whole app
 let loupeMap = null;
@@ -693,20 +935,29 @@ async function holeView(ctx) {
   const modeTitle = ctx.mode === "plan" ? "Plan" : ctx.mode === "round" ? "Round" : "Browse";
   A.where = { screen: `${modeTitle} · hole view`, course: ctx.slug, hole: n };
 
+  const IC = {
+    aerial: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3 3 8l9 5 9-5z"/><path d="M3 12l9 5 9-5M3 16l9 5 9-5"/></svg>',
+    green: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><ellipse cx="12" cy="17" rx="8" ry="3.5"/><path d="M12 17V4"/><path d="M12 4l6 2-6 2" fill="currentColor"/></svg>',
+    me: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>',
+    slope: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 18c4-6 8-9 18-11"/><path d="M14 14l3 3 3-3M17 9v8"/></svg>',
+    back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>' };
   const s = el(`<div class="hole">
-    <div class="bar"><button class="back" aria-label="Back">‹</button>
-      <div style="flex:1;min-width:0"><div class="holenav"><button id="prev" aria-label="Previous hole">‹</button><span class="hn">Hole ${n}</span><button id="next" aria-label="Next hole">›</button>
-      <span class="sub" id="ydHead">par ${h.par} · ${cardYards(course, tee, n)} yd</span></div>
-      <div class="sub">${esc(modeTitle)} · ${esc(m.name)} · <button id="teeBtn" style="all:unset;cursor:pointer;text-decoration:underline">${esc(tee)} tees${tee !== ctx.tees ? " (this hole)" : ""}</button></div></div>
-      <button class="btn small alt" id="menu">⋯</button></div>
+    <div class="hhead"><button class="iconbtn back" aria-label="Back">${IC.back}</button>
+      <div class="mid"><button class="nav" id="prev" aria-label="Previous hole">‹</button>
+        <button class="ttl" id="teeBtn" aria-label="Hole ${n}, par ${h.par}, ${esc(tee)} tees${ctx.mode === "browse" ? "" : ". Tap to change tees for this hole"}"><b>Hole ${n}</b><span class="caps">Par ${h.par} · ${esc(tee)} tees${tee !== ctx.tees ? " (this hole)" : ""}</span></button>
+        <button class="nav" id="next" aria-label="Next hole">›</button></div>
+      <button class="iconbtn" id="menu" aria-label="More">⋯</button></div>
     <div class="mapwrap"><div id="map"></div>
-      <div class="fl seg" style="top:10px;left:10px"><button data-v="hole" class="on">Hole</button><button data-v="green">Green</button></div>
-      <div class="fl seg" style="top:10px;right:10px"><button data-b="map">Map</button><button data-b="aerial">Aerial</button></div>
-      <button class="fl floatbtn" id="reset" style="top:50px;left:10px">Reset</button>
-      <button class="fl floatbtn" id="slopesBtn" style="top:90px;left:10px" hidden>Slopes</button>
-      <div class="fl pinlabel" id="pinLabel" style="top:50px;right:10px"></div>
+      <div class="fl rcol">
+        <button class="rbtn" id="bAerial" data-b="aerial" aria-label="Aerial view" title="Aerial">${IC.aerial}</button>
+        <button class="rbtn" id="bGreen" data-v="green" aria-label="Green view" title="Green view">${IC.green}</button>
+        <button class="rbtn" id="reset" aria-label="Center on me" title="Center on me">${IC.me}</button>
+        <button class="rbtn" id="slopesBtn" aria-label="Slopes" title="Slopes" hidden>${IC.slope}</button>
+      </div>
+      <div class="fl pinlabel" id="pinLabel" style="left:12px;top:12px"></div>
       <div class="fl presets" id="presets" hidden></div>
       <div class="fl hint" id="hint" hidden><span id="hintText"></span><button id="hintDone">Done</button></div>
+      <span id="ydHead" hidden></span>
     </div>
     <div class="sheet" id="sheet"></div></div>`);
   app.appendChild(s);
@@ -727,13 +978,18 @@ async function holeView(ctx) {
   const hzLayer = L.layerGroup().addTo(map);               // front/middle/back labels on the hazards in play
   const slopeLayer = L.layerGroup().addTo(map);            // green slopes (Green view, "Slopes" toggle)
   let slopes = null; loadSlopes(ctx.slug).then(d => { slopes = d; drawAll(false); });
-  let hzOpen = prefs.hzOpen !== false;
+  let hzOpen = prefs.hzOpen === true, clubsOpen = false;    // hazard details and the club list start folded
   const holeBounds = () => L.latLngBounds([teeP, h.greenCenter, ...h.path.slice(1, -1)]).pad(0.12);
   const greenBounds = () => L.latLngBounds(h.green).pad(0.35);
   const frame = () => {
-    map.invalidateSize({ animate: false });                 // the sheet below changes height: re-measure the map first
-    if (view === "green") map.fitBounds(greenBounds(), { paddingTopLeft: [10, 90], paddingBottomRight: [10, tapMode === "pin" ? 200 : 60] });   // room for the presets
-    else map.fitBounds(holeBounds(), { paddingTopLeft: [10, 90], paddingBottomRight: [10, 40] });
+    map.invalidateSize({ animate: false });
+    // the map runs under the pill (top) and the sheet (bottom): fit the hole into the space between, then move it up
+    // into that space (fitBounds padding is unreliable on the turned map)
+    const topPad = 16, below = ($("#sheet", s)?.offsetHeight || 0) + (view === "green" && tapMode === "pin" ? 160 : 16);
+    const bnds = view === "green" ? greenBounds() : holeBounds();
+    const z = map.getBoundsZoom(bnds, false, L.point(80, topPad + below));
+    map.setView(bnds.getCenter(), Math.min(z, view === "green" ? 21 : 19), { animate: false });
+    map.panBy([0, (below - topPad) / 2], { animate: false });
   };
   const setBase = b => { base = b; prefs.base = b; Store.set("viewPrefs", prefs);
     s.querySelectorAll("[data-b]").forEach(x => x.classList.toggle("on", x.dataset.b === b));
@@ -741,7 +997,10 @@ async function holeView(ctx) {
   const setView = v => { view = v; s.querySelectorAll("[data-v]").forEach(x => x.classList.toggle("on", x.dataset.v === v)); drawAll(); frame(); };   // draw (sheet height) first, then frame
   s.querySelectorAll("[data-b]").forEach(x => x.onclick = () => setBase(x.dataset.b));
   s.querySelectorAll("[data-v]").forEach(x => x.onclick = () => setView(x.dataset.v));
-  $("#reset", s).onclick = frame;
+  $("#bAerial", s).onclick = () => setBase(base === "aerial" ? "map" : "aerial");   // round buttons toggle
+  $("#bGreen", s).onclick = () => setView(view === "green" ? "hole" : "green");
+  // center on me: my GPS spot if I have a fresh fix, otherwise the whole hole (or green) again
+  $("#reset", s).onclick = () => { if (A.gps && Date.now() - A.gps.t < 30000) map.setView(A.gps.p, Math.max(map.getZoom(), 18)); else frame(); };
   $("#slopesBtn", s).onclick = () => { prefs.slopes = !prefs.slopes; Store.set("viewPrefs", prefs); drawAll(false); };
   const loupeBase = () => L.imageOverlay(h.aerial.img, h.aerial.bounds);
   const wasHold = attachHold(map, loupeBase, ll => onTap(ll), () => !!tapMode);
@@ -933,7 +1192,7 @@ async function holeView(ctx) {
     const kindOf = ctxTrace.kind;
     if (kindOf === "avoid") {
       const md = modal(`<h3 style="margin:0">Name this avoid zone</h3><label class="f">Name<input id="nm" placeholder="e.g. dead short-sided spot left"></label>
-        <div class="row"><button class="btn red" id="r">Red · penalty or lost ball</button><button class="btn" style="background:#e0a800;color:#16231a" id="y">Yellow · costly but playable</button></div>`);
+        <div class="row"><button class="btn red" id="r">Red · penalty or lost ball</button><button class="btn" style="background:#A8862F;border-color:#A8862F" id="y">Yellow · costly but playable</button></div>`);
       const save = color => { const all = Store.avoid(ctx.slug); (all[n] = all[n] || []).push({ id: "a" + Store.id(), name: $("#nm", md).value.trim() || "Avoid zone", color, ring: pts }); Store.saveAvoid(ctx.slug, all); md.remove(); drawAll(); toast("Avoid zone saved"); };
       $("#r", md).onclick = () => save("red"); $("#y", md).onclick = () => save("yellow");
     } else {
@@ -1012,15 +1271,15 @@ async function holeView(ctx) {
     const btn = $("#slopesBtn", s); btn.hidden = view !== "green" || !slopes?.holes?.[n]; btn.classList.toggle("on", !!prefs.slopes);
     const sh = slopeHole(); if (!sh || view !== "green" || !prefs.slopes) return;
     L.imageOverlay("data/" + sh.img, sh.bounds, { pane: "fills", interactive: false }).addTo(slopeLayer);
-    sh.contours.forEach(c => L.polyline(c, { pane: "hz", color: "#ffffff", weight: 0.6, opacity: 0.25, interactive: false }).addTo(slopeLayer));
+    sh.contours.forEach(c => L.polyline(c, { pane: "hz", color: base === "map" ? "#1E3A2B" : "#FFFDF7", weight: 0.6, opacity: 0.28, interactive: false }).addTo(slopeLayer));
     const R = Math.PI / 180, at = (o, b2, m) => Geo.ll([Math.sin(b2 * R) * m, Math.cos(b2 * R) * m], o);
     sh.arrows.filter(a => a[3] >= 0.75).forEach(([la, lo, down]) => {      // small arrows pointing downhill
       const o = [la, lo], tip = at(o, down, 0.8), tail = at(o, down + 180, 0.8);
-      L.polyline([tail, tip], { pane: "hz", color: "#16231a", weight: 1.2, opacity: 0.4, interactive: false }).addTo(slopeLayer);
-      L.polyline([at(tip, down + 150, 0.45), tip, at(tip, down - 150, 0.45)], { pane: "hz", color: "#16231a", weight: 1.2, opacity: 0.4, interactive: false }).addTo(slopeLayer);
+      L.polyline([tail, tip], { pane: "hz", color: "#1E3A2B", weight: 1.2, opacity: 0.55, interactive: false }).addTo(slopeLayer);
+      L.polyline([at(tip, down + 150, 0.45), tip, at(tip, down - 150, 0.45)], { pane: "hz", color: "#1E3A2B", weight: 1.2, opacity: 0.55, interactive: false }).addTo(slopeLayer);
     });
     sh.steep.forEach(z => {
-      L.polygon(z.ring, { pane: "hz", color: "#8e1c14", weight: 1.2, opacity: 0.7, dashArray: "3 4", fill: false, interactive: false }).addTo(slopeLayer);
+      L.polygon(z.ring, { pane: "hz", color: "#7A1F2B", weight: 1.2, opacity: 0.8, dashArray: "3 4", fill: false, interactive: false }).addTo(slopeLayer);
       const c = [z.ring.reduce((a, q) => a + q[0], 0) / z.ring.length, z.ring.reduce((a, q) => a + q[1], 0) / z.ring.length];
       L.marker(c, { interactive: false, keyboard: false, icon: L.divIcon({ className: "", iconSize: [0, 0], html: `<div class="slopelbl">${esc(z.label)}</div>` }) }).addTo(slopeLayer);
     });
@@ -1048,20 +1307,24 @@ async function holeView(ctx) {
     pm.on("drag", e => pinLoupe.move(e.target.getLatLng()));
     pm.on("dragend", e => { pinLoupe.end(); const ll = e.target.getLatLng(); setPin(onGreen([ll.lat, ll.lng])); drawAll(false); });
     pm.on("click", () => { if (ctx.mode !== "round" || true) setTap(tapMode === "pin" ? null : "pin"); });
-    if (view === "green") [3, 6, 10].forEach(ft => L.circle(pin, { radius: ft / 3.28084, color: "#fff", weight: 1, opacity: .6, fill: false, interactive: false, pane: "lines" }).addTo(top));
+    const LC = base === "map" ? "#1E3A2B" : "#FFFDF7";      // lines: hunter on the drawn map, light on the aerial
+    if (view === "green") [3, 6, 10].forEach(ft => L.circle(pin, { radius: ft / 3.28084, color: LC, weight: 1, opacity: .6, fill: false, interactive: false, pane: "lines" }).addTo(top));
     // planned targets + planned line
     const P = ph || (roundPlan ? roundPlan.holes[n] : null);
     const planned = P ? planKeys.map(k => P[k]?.p).filter(Boolean) : [];
     if (planned.length) {
-      L.polyline([teeToday(), ...planned, pin], { pane: "lines", color: "#ffd27a", weight: 2, dashArray: "6 7", interactive: false }).addTo(top);
-      planKeys.forEach(k => { if (!P[k]?.p) return; L.marker(P[k].p, { icon: tgtIcon(k === "teeTarget" ? "T" : k === "layup" ? "L" : "A", true), draggable: ctx.mode === "plan", zIndexOffset: 600 }).addTo(top)
+      L.polyline([teeToday(), ...planned, pin], { pane: "lines", color: LC, weight: 1.6, dashArray: "6 6", interactive: false }).addTo(top);
+      planKeys.forEach((k, ki) => { if (!P[k]?.p) return;
+        let o = teeToday(); for (let j = ki - 1; j >= 0; j--) if (P[planKeys[j]]?.p) { o = P[planKeys[j]].p; break; }
+        const lbl = `${Math.round(Geo.yd(o, P[k].p))}${P[k].club ? ` ${clubAbbr(P[k].club)}` : ""}`;
+        L.marker(P[k].p, { icon: tgtIcon(k === "teeTarget" ? "T" : k === "layup" ? "L" : "A", true, lbl), draggable: ctx.mode === "plan", zIndexOffset: 600 }).addTo(top)
         .on("dragend", e => { if (ctx.mode !== "plan") return; const ll = e.target.getLatLng(); ph[k].p = [ll.lat, ll.lng]; if (!ph[k].clubSet) ph[k].club = pickFor(k, planOrigin(k), ph[k].p)?.name || null; persist(); drawAll(false); }); });
     } else if (ctx.mode !== "round") {
-      L.polyline(playLine(h, teeP, getPin()), { pane: "lines", color: "#fff", weight: 1.6, dashArray: "5 7", opacity: .85, interactive: false }).addTo(top);
+      L.polyline(playLine(h, teeP, getPin()), { pane: "lines", color: LC, weight: 1.6, dashArray: "6 6", opacity: .9, interactive: false }).addTo(top);
     }
     // round: actual shots + GPS
     if (rh?.shots?.length) {
-      L.polyline(rh.shots.map(x => x.p), { pane: "lines", color: "#fff", weight: 2.5, interactive: false }).addTo(top);
+      L.polyline(rh.shots.map(x => x.p), { pane: "lines", color: base === "map" ? "#1B1B18" : "#FFFFFF", weight: 2, interactive: false }).addTo(top);
       rh.shots.slice(1).forEach((x, i) => {
         const last = i === rh.shots.length - 2 && x.onGreen;      // my ball on the green: drag it into place (GPS is only good to a few yards)
         const mk = L.marker(x.p, { icon: ballIcon, interactive: last, draggable: last, zIndexOffset: last ? 850 : 0 }).addTo(top)
@@ -1071,34 +1334,36 @@ async function holeView(ctx) {
       });
     }
     if (A.gps && ctx.mode === "round") {
-      L.circle(A.gps.p, { radius: A.gps.acc / YD, color: "#2a7de1", weight: 1, fillOpacity: .12, interactive: false }).addTo(top);
-      L.circleMarker(A.gps.p, { radius: 7, color: "#fff", weight: 3, fillColor: "#2a7de1", fillOpacity: 1, interactive: false }).addTo(top);
+      L.circle(A.gps.p, { radius: A.gps.acc / YD, color: "#3E6E8E", weight: 1, fillOpacity: .12, interactive: false }).addTo(top);
+      L.circleMarker(A.gps.p, { radius: 7, color: "#FFFDF7", weight: 3, fillColor: "#3E6E8E", fillOpacity: 1, interactive: false }).addTo(top);
     }
     if (trace?.length) L.polyline(trace.concat(trace.length > 2 ? [trace[0]] : []), { color: "#ff4fd8", weight: 3, dashArray: "4 4", pane: "lines" }).addTo(top);
     renderSheet();
   }
 
   // ---- bottom sheet
-  function yardBlock(from, label, targets = [], fromGPS = false) {
+  function yardBlock(from, label, targets = [], fromGPS = false, side = "") {
     const pin = pinOrCenter(h, getPin());
     // my ball is on the green (inside the outline, not the fringe): everything in feet
     if (ctx.mode === "round" && Geo.inRing(from, h.green)) {
       const ft = ftTo(from, pin);
-      return `<div class="yards"><b>${ft}<span class="unit"> ft</span></b><div><div class="muted">Pin: ${ft} ft · ${esc(label)}${pinMoved() ? "" : " (pin at center)"}</div>
-        ${fromGPS ? '<div class="warn">GPS is only good to a few yards on the green. Tap "On green" to place your ball, then drag it into place.</div>' : ""}</div></div>`;
+      return `<div class="caps topin">To the pin · on the green</div><div class="yards"><b>${ft}<span class="unit"> ft</span></b><div class="ylab"><span class="ptoday">Pin: <b>${ft} ft</b></span><span class="muted it">${esc(label)}${pinMoved() ? "" : " · pin at center"}</span></div></div>
+        ${fromGPS ? '<div class="warn">GPS is only good to a few yards on the green. Tap "On green" to place your ball, then drag it into place.</div>' : ""}`;
     }
     const line = playLine(h, from, getPin(), targets);
     const total = Geo.length(line) * YD;
-    // front/center/back are measured along the last leg into the green, from the last point well short of it
+    // front/middle/back are measured along the last leg into the green, from the last point well short of it
     let li = line.length - 2; while (li > 0 && Geo.yd(line[li], pin) < 30) li--;
     const last = line[li], before = Geo.length(line.slice(0, li + 1)) * YD;
     const yd = Math.round(total);
-    const fb = Geo.frontBack(h.green, last, pin);   // where my line to the pin enters (front) and leaves (back) the green; C = green center
+    const fb = Geo.frontBack(h.green, last, pin);   // where my line to the pin enters (front) and leaves (back) the green; M = green center
     const c = Math.round(before + Geo.yd(last, h.greenCenter));
     const bent = line.length > 2;
-    return `<div class="yards"><b>${yd}</b><div><div class="muted">${esc(label)} to the pin${pinMoved() ? "" : " (center)"}${bent ? " · along the line of play" : ""}</div>
-      <div class="fcb">${fb ? `<span>F <b>${Math.round(before + fb.front)}</b></span>` : ""}<span>M <b>${c}</b></span>${fb ? `<span>B <b>${Math.round(before + fb.back)}</b></span>` : ""}</div>
-      ${playsLikeOn(ctx.slug) ? `<div class="pl">Plays like ~${plays(ctx.slug, yd)} (estimate, ${meta(ctx.slug).elevationFt.toLocaleString()} ft)</div>` : ""}</div></div>`;
+    return `<div class="caps topin">To the pin${pinMoved() ? "" : " · center"}</div>
+      <div class="yards"><b>${yd}</b><div class="ylab">${side || `<span class="ptoday">card ${card}</span>`}
+        <span class="muted it">${esc(label)}${bent ? " · line of play" : ""}</span>
+        ${playsLikeOn(ctx.slug) ? `<span class="pl it">Plays like ~${plays(ctx.slug, yd)} (estimate, ${meta(ctx.slug).elevationFt.toLocaleString()} ft)</span>` : ""}</div></div>
+      <div class="fbbox">${fb ? `<span><i>Front</i><b>${Math.round(before + fb.front)}</b></span>` : ""}<span class="m"><i>Middle</i><b>${c}</b></span>${fb ? `<span><i>Back</i><b>${Math.round(before + fb.back)}</b></span>` : ""}</div>`;
   }
   // the line the hazard panel measures along: browse = from the tee; plan = from the start of the shot I'm setting,
   // else my last planned target; round = tee (GPS on the tee) / my GPS / my last ball. To the pin through targets ahead.
@@ -1118,36 +1383,67 @@ async function holeView(ctx) {
     rows.forEach(r => L.marker(r.c, { interactive: false, keyboard: false, zIndexOffset: 300, icon: L.divIcon({ className: "", iconSize: [0, 0],   // marker pane: stays upright on the turned map
       html: `<div class="hzlbl${r.red ? " red" : ""}">${r.F}/${r.M}/${r.B}</div>` }) }).addTo(hzLayer));
   }
+  // the bottom sheet: drag the handle up for everything, down for the map (snaps to 47% or 88% of the screen)
+  function sheetHeights() { const H = s.clientHeight || innerHeight; return [Math.round(H * 0.47), Math.round(H * 0.88)]; }
+  function setSheet(big, px) {
+    const sh = $("#sheet", s), [lo, hi] = sheetHeights(); A.sheetBig = big;
+    sh.style.height = (px ?? (big ? hi : lo)) + "px"; placeFloats();
+  }
+  // drag handling lives on the sheet itself (bound once), so a re-render mid-drag (live GPS updates) doesn't cut it off
+  function bindSheetDrag(sh) {
+    if (!sh.style.height) setSheet(!!A.sheetBig);
+    if (sh.dataset.drag) return; sh.dataset.drag = "1";
+    let y0 = null, h0 = 0, moved = false;
+    sh.addEventListener("pointerdown", e => { if (!e.target.closest(".grab")) return; y0 = e.clientY; h0 = sh.offsetHeight; moved = false; sh.classList.add("dragging"); try { sh.setPointerCapture(e.pointerId); } catch {} });
+    sh.addEventListener("pointermove", e => { if (y0 == null) return; const [lo, hi] = sheetHeights(), dy = y0 - e.clientY; if (Math.abs(dy) > 4) moved = true;
+      sh.style.height = Math.max(lo * 0.6, Math.min(hi, h0 + dy)) + "px"; placeFloats(); });
+    const up = () => { if (y0 == null) return; sh.classList.remove("dragging"); const [lo, hi] = sheetHeights();
+      setSheet(moved ? sh.offsetHeight > (lo + hi) / 2 : !A.sheetBig); y0 = null; };
+    sh.addEventListener("pointerup", up); sh.addEventListener("pointercancel", up);
+  }
+  // pin presets and hints sit just above the sheet
+  function placeFloats() {
+    const hgt = $("#sheet", s)?.offsetHeight || 0;
+    s.style.setProperty("--sheet-h", hgt + "px");             // the map credit line sits just above the sheet
+    $("#presets", s).style.bottom = (hgt + 62) + "px"; $("#hint", s).style.bottom = (hgt + 12) + "px";
+  }
   function renderSheet() {
-    const sh = $("#sheet", s); const pin = pinOrCenter(h, getPin()); let html = "";
+    const sh = $("#sheet", s); const pin = pinOrCenter(h, getPin());
     // ball on the green: putting in feet, so the yardage hazard panel and its labels step aside
     const greenMode = ctx.mode === "round" && rh.shots?.length && Geo.inRing(measureFrom(), h.green);
     const hzRows = greenMode ? [] : hazardPanel(course, n, panelLine()); hzLabels(hzRows);
-    const hzHTML = slopeHTML() + (greenMode ? "" : panelHTML(hzRows, ctx.slug, hzOpen) + pinHazardsHTML(course, n, pin));
+    const hp = greenMode ? { chips: "", carry: "" } : panelHTML(hzRows, ctx.slug, hzOpen);
+    const chips = hp.chips;                                      // chips up top; the carry tip and the rest when dragged up
+    const after = hp.carry + slopeHTML() + (greenMode ? "" : pinHazardsHTML(course, n, pin));
     $("#ydHead", s).textContent = onTeeGPS() ? `par ${h.par} · plays ${playsToday()} today (card ${card})` : `par ${h.par} · ${card} yd`;
+    const pinBtn = `<button class="btn alt" id="movePin">${tapMode === "pin" ? "Done moving pin" : ctx.mode === "plan" && !pinMoved() ? "Set pin" : "Move pin"}</button>`;
+    const navBtns = done => `<div class="row"><button class="btn alt" id="pv">‹ Hole ${n > 1 ? n - 1 : NH}</button>${n < NH ? `<button class="btn" id="nx">Hole ${n + 1} ›</button>` : `<button class="btn" id="sum">${done}</button>`}</div>`;
+    let top = "", detail = "";
     if (ctx.mode === "browse") {
-      html += yardBlock(teeP, `${tee} tee`);
-      html += hzHTML;
-      html += `<div class="row"><button class="btn alt" id="movePin">${tapMode === "pin" ? "Done moving pin" : "Move pin"}</button></div>`;
+      top += yardBlock(teeP, `${tee} tee`);
+      const pk = clubPick(plays(ctx.slug, card), h.par > 3 ? "total" : "carry", h.par > 3);
+      if (pk) top += `<div class="clubrow"><div class="cn"><b>${esc(pk.name)}</b><small>${h.par > 3 ? "Tee shot" : "To the green"} · ${card} to the pin</small><span class="note">${esc(clubLine(pk.club))}</span></div></div>`;
+      top += chips + `<div class="actions">${pinBtn}</div>`;
+      detail += after;
     } else if (ctx.mode === "plan") {
-      html += yardBlock(teeP, `${tee} tee`, planKeys.map(k => ph[k]?.p));
-      html += `<div class="row"><button class="btn small alt" id="movePin">${tapMode === "pin" ? "Done moving pin" : pinMoved() ? "Move pin" : "Set pin (center now)"}</button></div>`;
+      top += yardBlock(teeP, `${tee} tee`, planKeys.map(k => ph[k]?.p));
+      top += `<div class="actions">${pinBtn}</div>`;
       planKeys.forEach(k => {
         const t = ph[k]; const from = planOrigin(k);
         const yd = t?.p ? Math.round(Geo.yd(from, t.p)) : null;
         const warns = t?.p ? targetWarnings(course, n, from, t.p) : [];
-        html += `<div class="card" style="padding:10px;gap:6px"><div style="display:flex;gap:8px;align-items:center"><b style="flex:1">${KEYNAME[k]}</b>
-          ${yd != null ? `<span class="num">${yd} yd${playsTxt(ctx.slug, yd)}</span>` : '<span class="muted">not set</span>'}
+        top += `<div class="card" style="padding:12px;gap:8px;box-shadow:inset 0 0 0 1.5px var(--line)"><div style="display:flex;gap:8px;align-items:center"><b style="flex:1;font:700 16px var(--head)">${KEYNAME[k]}</b>
+          ${yd != null ? `<span class="num" style="font-weight:800">${yd} yd${playsTxt(ctx.slug, yd)}</span>` : '<span class="muted">not set</span>'}
           <button class="btn small${tapMode === k ? "" : " alt"}" data-set="${k}">${t?.p ? "Move" : "Set"}</button></div>
           ${t?.p ? clubPickHTML(k, from, t) : ""}
           ${warns.map(w => `<div class="warn${w.red ? " red" : ""}">Heads up: ${esc(w.msg)}. You can keep this target.</div>`).join("")}</div>`;
       });
-      html += hzHTML;
-      html += `<div class="muted">Danger side${ph.dangerSet ? "" : " (suggested from nearby hazards)"}</div><div class="chips">${["short", "long", "left", "right"].map(d => `<button class="chip${ph.danger === d ? " on" : ""}" data-danger="${d}">${d}</button>`).join("")}</div>`;
+      top += chips;
+      detail += after;
+      detail += `<div class="muted">Danger side${ph.dangerSet ? "" : " (suggested from nearby hazards)"}</div><div class="chips">${["short", "long", "left", "right"].map(d => `<button class="chip${ph.danger === d ? " on" : ""}" data-danger="${d}">${d}</button>`).join("")}</div>`;
       const sc = ph.score || h.par;   // shown as par until you change it or set a target
-      html += `<div style="display:flex;gap:10px;align-items:center"><span class="muted">Planned score</span><button class="btn small alt" id="sm">−</button><b class="num" style="font-size:20px">${sc}</b><button class="btn small alt" id="sp">+</button></div>
-        <input id="note" placeholder="Note for this hole" value="${esc(ph.note || "")}">
-        <div class="row"><button class="btn alt" id="pv">‹ Hole ${n > 1 ? n - 1 : NH}</button>${n < NH ? `<button class="btn" id="nx">Hole ${n + 1} ›</button>` : `<button class="btn" id="sum">Finish plan</button>`}</div>`;
+      detail += `<div style="display:flex;gap:10px;align-items:center"><span class="muted">Planned score</span><button class="btn small alt" id="sm">−</button><b class="num" style="font:800 24px var(--head)">${sc}</b><button class="btn small alt" id="sp">+</button></div>
+        <input id="note" placeholder="Note for this hole" value="${esc(ph.note || "")}">` + navBtns("Finish plan");
     } else {
       // on the tee (no shots yet): today's tee = your GPS spot when you're on the tee box, else the course marker
       const onTee = !rh.shots?.length, gpsTee = onTeeGPS();
@@ -1155,12 +1451,10 @@ async function holeView(ctx) {
       const label = onTee ? (gpsTee ? `${tee} tee · your spot (GPS ±${Math.round(A.gps.acc)} yd)` : `${tee} tee`)
         : fromGPS ? `You (GPS ±${Math.round(A.gps.acc)} yd)` : rh.shots?.length > 1 ? "Your ball" : `${tee} tee`;
       const P = roundPlan?.holes[n];
-      html += yardBlock(from, label, P ? planKeys.map(k => P[k]?.p) : [], fromGPS);
-      if (gpsTee) html += `<div class="today">Plays <b>${playsToday()}</b> today (card ${card})</div>`;
-      html += hzHTML;
+      top += yardBlock(from, label, P ? planKeys.map(k => P[k]?.p) : [], fromGPS, gpsTee ? `<span class="ptoday">plays ${playsToday()} today / card ${card}</span>` : "");
       // plan on the tee: targets stay where you planned them; distances come from today's tee, and the first club is
       // re-picked from your bag if the new distance calls for a different one
-      let repick = null;
+      let repick = null, planRows = "";
       if (P && onTee && planKeys.some(k => P[k]?.p)) {
         let prev = from;
         const rows = planKeys.filter(k => P[k]?.p).map((k, i) => {
@@ -1172,23 +1466,33 @@ async function holeView(ctx) {
           }
           return `<div class="planrow"><span>${KEYNAME[k]}</span><b class="num">${d} yd</b><span class="club">${esc(club || "")}</span></div>${note ? `<div class="warn">${esc(note)}</div>` : ""}`;
         });
-        html += `<div class="planrows"><div class="muted">Your plan${gpsTee ? " from today's tee" : ""}</div>${rows.join("")}</div>`;
-      } else if (P) html += `<div class="muted">Plan: ${planKeys.filter(k => P[k]?.p).map(k => `${KEYNAME[k]} ${esc(P[k].club || "")}`).join(" → ") || "no targets"}${P.danger ? ` · danger ${P.danger}` : ""}${P.score ? ` · planned ${P.score}` : ""}${P.note ? ` · “${esc(P.note)}”` : ""}</div>`;
+        planRows = `<div class="planrows"><div class="muted">Your plan${gpsTee ? " from today's tee" : ""}</div>${rows.join("")}</div>`;
+      } else if (P) planRows = `<div class="muted">Plan: ${planKeys.filter(k => P[k]?.p).map(k => `${KEYNAME[k]} ${esc(P[k].club || "")}`).join(" → ") || "no targets"}${P.danger ? ` · danger ${P.danger}` : ""}${P.score ? ` · planned ${P.score}` : ""}${P.note ? ` · “${esc(P.note)}”` : ""}</div>`;
       const nsh = Math.max(0, (rh.shots?.length || 0) - 1);
       const nextNo = nsh + 1;
-      // the planned club for this shot (re-picked when the tee moved) is pre-selected once; tap another chip to change it
+      // the club for this shot: the planned club (re-picked when the tee moved), else My Bag's pick for the distance
+      // ahead; pre-selected once per shot, "Change club" to pick another
       const planClub = repick && nsh === 0 ? repick.to : P && planKeys[nsh] ? P[planKeys[nsh]]?.club : null;
-      if (planClub && rh.clubFor !== nsh && !rh.nextClub) { rh.nextClub = planClub; rh.clubFor = nsh; }
-      html += `<div class="muted">Shot ${nextNo} club${repick && nsh === 0 ? ` (plan: ${esc(repick.from)} → ${esc(repick.to)} today)` : P && planKeys[nsh] && P[planKeys[nsh]]?.club ? ` (plan: ${esc(P[planKeys[nsh]].club)})` : ""}</div><div class="chips" id="clubs">${A.settings.bag.map(([c]) => `<button class="chip${rh.nextClub === c ? " on" : ""}" data-club="${esc(c)}">${esc(c)}</button>`).join("")}<button class="chip${rh.nextClub === "Putter" ? " on" : ""}" data-club="Putter">Putter</button></div>
-        <div class="row"><button class="btn" id="atBall">I'm at my ball</button><button class="btn alt" id="tapBall">Tap ball</button></div>
-        ${rh.shots?.at(-1)?.onGreen && rh.putts == null ? '<div class="row"><button class="btn" id="logPutts">Log putts</button></div>' : ""}
-        <div class="row"><button class="btn alt" id="onGreen">On green</button><button class="btn alt" id="pen">Penalty +1${rh.penalties ? ` (${rh.penalties})` : ""}</button><button class="btn alt" id="undo">Undo</button></div>
-        <div class="row"><button class="btn alt small" id="live">${A.gpsWatch !== null ? "Live GPS on" : "Turn on live GPS"}</button><button class="btn alt small" id="movePin">${tapMode === "pin" ? "Done moving pin" : "Move pin"}</button></div>
-        <div style="display:flex;gap:10px;align-items:center"><span class="muted">Score</span><b class="num" style="font-size:22px">${rh.score ?? "–"}</b><span class="muted">${rh.putts != null ? `${rh.putts} putts${rh.firstPuttFt != null ? ` · first ${rh.firstPuttFt} ft${rh.leaveFt ? `, left ${rh.leaveFt} ft` : ""}` : ""}` : ""}</span>
-        <button class="btn small alt" id="sm">−</button><button class="btn small alt" id="sp">+</button></div>
-        <div class="row"><button class="btn alt" id="pv">‹ Hole ${n > 1 ? n - 1 : NH}</button>${n < NH ? `<button class="btn" id="nx">Hole ${n + 1} ›</button>` : `<button class="btn" id="sum">Finish round</button>`}</div>`;
+      const ahead = playLine(h, from, getPin(), P ? planKeys.map(k => P[k]?.p) : [])[1] || pin, teeShot = nsh === 0 && h.par > 3;
+      const sug = greenMode ? "Putter" : clubPick(plays(ctx.slug, Geo.yd(from, ahead)), teeShot ? "total" : "carry", teeShot)?.name;
+      if (rh.clubFor !== nsh && !rh.nextClub && (planClub || sug)) { rh.nextClub = planClub || sug; rh.clubFor = nsh; }
+      const cur = A.bag.find(c => c.name === rh.nextClub);
+      const tgtYd = Math.round(Geo.yd(from, ahead)), shotName = nsh === 0 ? "Tee shot" : `Shot ${nextNo}`;
+      const cnote = repick && nsh === 0 ? `Tees ${card - playsToday() >= 0 ? "up" : "back"}: ${repick.from} → ${repick.to} today` : planClub && planClub !== rh.nextClub ? `Planned ${planClub}` : planClub ? "As planned" : cur ? `From your bag · ${clubLine(cur).split(" · ")[1]}` : "";
+      top += `<div class="clubrow"><div class="cn"><b>${rh.nextClub ? esc(rh.nextClub) : "No club picked"}</b><small>${shotName} · ${tgtYd} to ${ahead === pin ? "the pin" : "target"}</small>${cnote ? `<span class="note">${esc(cnote)}</span>` : ""}</div><button class="btn small alt" id="chgClub">${clubsOpen ? "Done" : "Change"}</button></div>`;
+      if (clubsOpen) top += `<div class="chips" id="clubs">${A.settings.bag.map(([c]) => `<button class="chip${rh.nextClub === c ? " on" : ""}" data-club="${esc(c)}">${esc(c)}</button>`).join("")}<button class="chip${rh.nextClub === "Putter" ? " on" : ""}" data-club="Putter">Putter</button></div>`;
+      top += chips;
+      const putts = rh.shots?.at(-1)?.onGreen && rh.putts == null;
+      top += `<div class="actions">${pinBtn}${putts ? '<button class="btn big" id="logPutts">Log putts</button>' : '<button class="btn big" id="atBall">I\'m at my ball</button>'}</div>`;
+      detail += planRows + after;
+      detail += `<div class="row">${putts ? '<button class="btn alt" id="atBall">I\'m at my ball</button>' : ""}<button class="btn alt" id="tapBall">Tap ball</button><button class="btn alt" id="onGreen">On green</button></div>
+        <div class="row"><button class="btn alt" id="pen">Penalty +1${rh.penalties ? ` (${rh.penalties})` : ""}</button><button class="btn alt" id="undo">Undo</button><button class="btn alt" id="live">${A.gpsWatch !== null ? "Live GPS on" : "Live GPS"}</button></div>
+        <div style="display:flex;gap:10px;align-items:center"><span class="muted">Score</span><b class="num" style="font:800 26px var(--head)">${rh.score ?? "–"}</b><span class="muted" style="flex:1">${rh.putts != null ? `${rh.putts} putts${rh.firstPuttFt != null ? ` · first ${rh.firstPuttFt} ft${rh.leaveFt ? `, left ${rh.leaveFt} ft` : ""}` : ""}` : ""}</span>
+        <button class="btn small alt" id="sm">−</button><button class="btn small alt" id="sp">+</button></div>` + navBtns("Finish round");
     }
-    sh.innerHTML = html + `<div class="fbrow">${feedbackLink()}</div>`;
+    sh.innerHTML = `<div class="grab" role="button" aria-label="Drag up for more"></div>${top}<div class="detail">${detail}<div class="fbrow">${feedbackLink()}</div></div>`;
+    bindSheetDrag(sh);
+    placeFloats();
     const on = (id, f) => { const x = $("#" + id, sh); if (x) x.onclick = f; };
     on("movePin", () => setTap(tapMode === "pin" ? null : "pin"));
     on("hzToggle", () => { hzOpen = !hzOpen; prefs.hzOpen = hzOpen; Store.set("viewPrefs", prefs); renderSheet(); });
@@ -1208,7 +1512,8 @@ async function holeView(ctx) {
       if (ph.danger === undefined) { ph.danger = suggestDanger(); persist(); }
     }
     if (ctx.mode === "round") {
-      sh.querySelectorAll("[data-club]").forEach(x => x.onclick = () => { rh.nextClub = rh.nextClub === x.dataset.club ? null : x.dataset.club; persist(); renderSheet(); });
+      sh.querySelectorAll("[data-club]").forEach(x => x.onclick = () => { rh.nextClub = x.dataset.club; rh.clubFor = Math.max(0, (rh.shots?.length || 0) - 1); clubsOpen = false; persist(); renderSheet(); });   // tapping a club always selects it
+      on("chgClub", () => { clubsOpen = !clubsOpen; renderSheet(); });
       on("atBall", () => bestFix((p, acc) => { addBall(p, "gps"); toast(`Ball marked (GPS ±${Math.round(acc)} yd). Drag-free: tap "Tap ball" to fix it.`); }));
       on("tapBall", () => setTap("ball"));
       on("onGreen", () => {

@@ -939,24 +939,27 @@ async function holeView(ctx) {
 
   const IC = {
     aerial: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3 3 8l9 5 9-5z"/><path d="M3 12l9 5 9-5M3 16l9 5 9-5"/></svg>',
-    green: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><ellipse cx="12" cy="17" rx="8" ry="3.5"/><path d="M12 17V4"/><path d="M12 4l6 2-6 2" fill="currentColor"/></svg>',
+    green: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/><ellipse cx="10.5" cy="12" rx="3.5" ry="1.6"/></svg>',
+    pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 21V3"/><path d="M7 4l11 4-11 4" fill="currentColor"/><path d="M4 21h6"/></svg>',
     me: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>',
     slope: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 18c4-6 8-9 18-11"/><path d="M14 14l3 3 3-3M17 9v8"/></svg>',
     back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>' };
   const s = el(`<div class="hole">
     <div class="hhead"><button class="iconbtn back" aria-label="Back">${IC.back}</button>
       <div class="mid"><button class="nav" id="prev" aria-label="Previous hole">‹</button>
-        <button class="ttl" id="teeBtn" aria-label="Hole ${n}, par ${h.par}, ${esc(tee)} tees${ctx.mode === "browse" ? "" : ". Tap to change tees for this hole"}"><b>Hole ${n}</b><span class="caps">Par ${h.par} · ${esc(tee)} tees${tee !== ctx.tees ? " (this hole)" : ""}</span></button>
+        <button class="ttl" id="teeBtn" aria-label="Hole ${n}, par ${h.par}, ${esc(tee)} tees${ctx.mode === "browse" ? "" : ". Tap to change tees for this hole"}"><b>Hole ${n}</b><span class="caps">Par ${h.par} · ${esc(tee)} tees${tee !== ctx.tees ? "*" : ""}</span></button>
         <button class="nav" id="next" aria-label="Next hole">›</button></div>
       <button class="iconbtn" id="menu" aria-label="More">⋯</button></div>
     <div class="mapwrap"><div id="map"></div>
       <div class="fl rcol">
         <button class="rbtn" id="bAerial" data-b="aerial" aria-label="Aerial view" title="Aerial">${IC.aerial}</button>
         <button class="rbtn" id="bGreen" data-v="green" aria-label="Green view" title="Green view">${IC.green}</button>
+        <button class="rbtn" id="pinBtn" aria-label="Move pin" title="Move pin">${IC.pin}</button>
         <button class="rbtn" id="reset" aria-label="Center on me" title="Center on me">${IC.me}</button>
         <button class="rbtn" id="slopesBtn" aria-label="Slopes" title="Slopes" hidden>${IC.slope}</button>
       </div>
       <div class="fl pinlabel" id="pinLabel" style="left:12px;top:12px"></div>
+      <div class="fl slopecap" id="slopeCap" hidden></div>
       <div class="fl presets" id="presets" hidden></div>
       <div class="fl hint" id="hint" hidden><span id="hintText"></span><button id="hintDone">Done</button></div>
       <span id="ydHead" hidden></span>
@@ -980,18 +983,35 @@ async function holeView(ctx) {
   const hzLayer = L.layerGroup().addTo(map);               // front/middle/back labels on the hazards in play
   const slopeLayer = L.layerGroup().addTo(map);            // green slopes (Green view, "Slopes" toggle)
   let slopes = null; loadSlopes(ctx.slug).then(d => { slopes = d; drawAll(false); });
-  let hzOpen = prefs.hzOpen === true, clubsOpen = false;    // hazard details and the club list start folded
-  const holeBounds = () => L.latLngBounds([teeP, h.greenCenter, ...h.path.slice(1, -1)]).pad(0.12);
-  const greenBounds = () => L.latLngBounds(h.green).pad(0.35);
+  let hzOpen = prefs.hzOpen === true;                      // hazard front/middle/back details start folded
+  let sheetMin = 160;                                      // folded sheet height (set from its contents)
+  // what the map frames: the green (Green view); in a round, from where I am now to the green; otherwise tee to green
+  function framePts() {
+    if (view === "green") return h.green;
+    if (ctx.mode === "round") {
+      const P = roundPlan?.holes[n], from = measureFrom();
+      return [from, ...playLine(h, from, getPin(), P ? planKeys.map(k => P[k]?.p) : []).slice(1, -1), ...h.green];
+    }
+    const P = ph || null;
+    return [teeP, ...h.path.slice(1, -1), ...(P ? planKeys.map(k => P[k]?.p).filter(Boolean) : []), ...h.green];
+  }
+  // fit those points into the map above the collapsed sheet with a small margin. Measured on screen after the turn
+  // (bounds-based fitting is unreliable on a turned map), then zoomed and moved up into that space.
   const frame = () => {
     map.invalidateSize({ animate: false });
-    // the map runs under the pill (top) and the sheet (bottom): fit the hole into the space between, then move it up
-    // into that space (fitBounds padding is unreliable on the turned map)
-    const topPad = 16, below = ($("#sheet", s)?.offsetHeight || 0) + (view === "green" && tapMode === "pin" ? 160 : 16);
-    const bnds = view === "green" ? greenBounds() : holeBounds();
-    const z = map.getBoundsZoom(bnds, false, L.point(80, topPad + below));
-    map.setView(bnds.getCenter(), Math.min(z, view === "green" ? 21 : 19), { animate: false });
-    map.panBy([0, (below - topPad) / 2], { animate: false });
+    if (!map._loaded) map.setView(h.greenCenter, 17, { animate: false });
+    const sz = map.getSize(), green = view === "green";
+    const topPad = 10, below = sheetMin + 10 + (green && tapMode === "pin" ? 150 : 0), side = green ? 22 : 14;
+    const pts = framePts();
+    const box = () => { const cp = pts.map(p => map.latLngToContainerPoint(p));
+      return { x0: Math.min(...cp.map(p => p.x)), x1: Math.max(...cp.map(p => p.x)), y0: Math.min(...cp.map(p => p.y)), y1: Math.max(...cp.map(p => p.y)) }; };
+    const want = [sz.x / 2, topPad + (sz.y - topPad - below) / 2];          // the middle of the space above the sheet
+    for (let i = 0; i < 2; i++) {                                         // zoom to fit, then move the points' middle there
+      const b = box(), fit = Math.min((sz.x - 2 * side) / Math.max(b.x1 - b.x0, 1), (sz.y - topPad - below) / Math.max(b.y1 - b.y0, 1));
+      const z = Math.min(Math.floor((map.getZoom() + Math.log2(fit)) * 4) / 4, green ? 22 : 19.5);
+      if (z !== map.getZoom()) map.setZoom(z, { animate: false });
+      const c = box(); map.panBy([(c.x0 + c.x1) / 2 - want[0], (c.y0 + c.y1) / 2 - want[1]], { animate: false });
+    }
   };
   const setBase = b => { base = b; prefs.base = b; Store.set("viewPrefs", prefs);
     s.querySelectorAll("[data-b]").forEach(x => x.classList.toggle("on", x.dataset.b === b));
@@ -1003,11 +1023,12 @@ async function holeView(ctx) {
   $("#bGreen", s).onclick = () => setView(view === "green" ? "hole" : "green");
   // center on me: my GPS spot if I have a fresh fix, otherwise the whole hole (or green) again
   $("#reset", s).onclick = () => { if (A.gps && Date.now() - A.gps.t < 30000) map.setView(A.gps.p, Math.max(map.getZoom(), 18)); else frame(); };
+  $("#pinBtn", s).onclick = () => tapMode === "pin" ? $("#hintDone", s).onclick() : setTap("pin");
   $("#slopesBtn", s).onclick = () => { prefs.slopes = !prefs.slopes; Store.set("viewPrefs", prefs); drawAll(false); };
   const loupeBase = () => L.imageOverlay(h.aerial.img, h.aerial.bounds);
   const wasHold = attachHold(map, loupeBase, ll => onTap(ll), () => !!tapMode);
   const pinLoupe = dragLoupe(map, loupeBase);
-  map.on("click", e => { if (wasHold()) return; onTap([e.latlng.lat, e.latlng.lng]); });
+  map.on("click", e => { if (wasHold()) return; if (!tapMode) return setSheet("min"); onTap([e.latlng.lat, e.latlng.lng]); });   // a plain tap on the map folds the sheet
 
   // ---- what a tap does
   const HINTS = { pin: "Drag the flag, tap the green, or pick a preset. Press and hold to magnify.",
@@ -1017,7 +1038,7 @@ async function holeView(ctx) {
   function setTap(mode) {
     tapMode = mode;
     $("#hint", s).hidden = !mode; $("#hintText", s).textContent = mode ? HINTS[mode] : "";
-    $("#presets", s).hidden = mode !== "pin";
+    $("#presets", s).hidden = mode !== "pin"; $("#pinBtn", s).classList.toggle("on", mode === "pin");
     if (mode === "pin" || mode === "green") setView("green");
     else drawAll();
     if (mode === "pin") drawPresets();
@@ -1134,6 +1155,14 @@ async function holeView(ctx) {
 
   // ---- round helpers
   const shots = () => (rh.shots = rh.shots || []);
+  // turn the map so the hole plays up the screen (tee at the bottom, green at the top), then frame it. In a round once
+  // I've hit, it turns from where I am now to the green, so the shot ahead fills the screen.
+  function aim() {
+    const from = ctx.mode === "round" && rh.shots?.length ? measureFrom() : teeP;
+    A.holeBearing = bearingTo(Geo.yd(from, h.greenCenter) > 40 ? from : teeP, h.greenCenter);
+    if (map.setBearing) map.setBearing(-A.holeBearing * (A.bearingSign || 1));
+    frame();
+  }
   function ballSpot() { const sh = rh?.shots || []; return sh.length ? sh.at(-1).p : teeToday(); }
   function addBall(p, src, onGreen = false) {
     const sh = shots();
@@ -1144,7 +1173,7 @@ async function holeView(ctx) {
     }
     else if (rh.nextClub) sh.at(-1).club = rh.nextClub;
     sh.push({ p, club: null, src, onGreen });
-    rh.nextClub = null; persist(); drawAll();
+    rh.nextClub = null; persist(); drawAll(); if (view === "hole") aim();
   }
   // putting is in feet: first putt = my ball on the green to the pin; leave = where the first putt finished
   const firstPuttFt = () => { const b = rh.shots?.at(-1); return b?.onGreen ? ftTo(b.p, pinOrCenter(h, getPin())) : null; };
@@ -1271,6 +1300,8 @@ async function holeView(ctx) {
   function drawSlopes() {
     slopeLayer.clearLayers();
     const btn = $("#slopesBtn", s); btn.hidden = view !== "green" || !slopes?.holes?.[n]; btn.classList.toggle("on", !!prefs.slopes);
+    // the pin's slope, as a small caption on the map (Green view only)
+    const cap = $("#slopeCap", s), read = view === "green" ? pinSlope() : null; cap.hidden = !read; cap.textContent = read || "";
     const sh = slopeHole(); if (!sh || view !== "green" || !prefs.slopes) return;
     L.imageOverlay("data/" + sh.img, sh.bounds, { pane: "fills", interactive: false }).addTo(slopeLayer);
     sh.contours.forEach(c => L.polyline(c, { pane: "hz", color: base === "map" ? "#1E3A2B" : "#FFFDF7", weight: 0.6, opacity: 0.28, interactive: false }).addTo(slopeLayer));
@@ -1290,10 +1321,9 @@ async function holeView(ctx) {
     if (!slopes?.holes?.[n]) return "";
     if (slopeHidden()) return `<div class="muted">${slopes.holes[n].suspect && Store.get("slopeHide:" + ctx.slug, {})[n] === undefined ? `Slopes hidden: ${esc(slopes.holes[n].suspect)}` : "Slopes hidden for this green."}
       <button class="linkbtn" id="slopeShow">Show anyway</button></div>`;
-    const read = pinSlope();
     const note = view === "green" && prefs.slopes ? `<div class="muted" style="font-size:12px">Estimated from public lidar (${esc(slopes.year)}). Greens can change; trust what you see. ${esc(slopes.credit)}.
       <button class="linkbtn" id="slopeHide">Hide slopes for this green</button></div>` : "";
-    return `<div class="slope">${read ? `<b>${esc(read)}</b>` : ""}${note}</div>`;
+    return note ? `<div class="slope">${note}</div>` : "";
   }
 
   // ---- draw everything
@@ -1344,28 +1374,34 @@ async function holeView(ctx) {
   }
 
   // ---- bottom sheet
-  function yardBlock(from, label, targets = [], fromGPS = false, side = "") {
+  // the compact yardage row: yards to the pin, F / M / B beside it, a small caption under them. On the green: feet.
+  function yardRow(from, label, targets = [], extra = "") {
     const pin = pinOrCenter(h, getPin());
-    // my ball is on the green (inside the outline, not the fringe): everything in feet
     if (ctx.mode === "round" && Geo.inRing(from, h.green)) {
       const ft = ftTo(from, pin);
-      return `<div class="caps topin">To the pin · on the green</div><div class="yards"><b>${ft}<span class="unit"> ft</span></b><div class="ylab"><span class="ptoday">Pin: <b>${ft} ft</b></span><span class="muted it">${esc(label)}${pinMoved() ? "" : " · pin at center"}</span></div></div>
-        ${fromGPS ? '<div class="warn">GPS is only good to a few yards on the green. Tap "On green" to place your ball, then drag it into place.</div>' : ""}`;
+      return `<div class="yrow"><div class="ybig"><b>${ft}</b><i>ft</i></div><div class="ycol"><div class="yttl">To the pin · on the green</div>
+        <div class="ysub">${esc(label)}${pinMoved() ? "" : " · pin at center"}</div></div></div>`;
     }
     const line = playLine(h, from, getPin(), targets);
-    const total = Geo.length(line) * YD;
+    const yd = Math.round(Geo.length(line) * YD);
     // front/middle/back are measured along the last leg into the green, from the last point well short of it
     let li = line.length - 2; while (li > 0 && Geo.yd(line[li], pin) < 30) li--;
     const last = line[li], before = Geo.length(line.slice(0, li + 1)) * YD;
-    const yd = Math.round(total);
     const fb = Geo.frontBack(h.green, last, pin);   // where my line to the pin enters (front) and leaves (back) the green; M = green center
     const c = Math.round(before + Geo.yd(last, h.greenCenter));
-    const bent = line.length > 2;
-    return `<div class="caps topin">To the pin${pinMoved() ? "" : " · center"}</div>
-      <div class="yards"><b>${yd}</b><div class="ylab">${side || `<span class="ptoday">card ${card}</span>`}
-        <span class="muted it">${esc(label)}${bent ? " · line of play" : ""}</span>
-        ${playsLikeOn(ctx.slug) ? `<span class="pl it">Plays like ~${plays(ctx.slug, yd)} (estimate, ${meta(ctx.slug).elevationFt.toLocaleString()} ft)</span>` : ""}</div></div>
-      <div class="fbbox">${fb ? `<span><i>Front</i><b>${Math.round(before + fb.front)}</b></span>` : ""}<span class="m"><i>Middle</i><b>${c}</b></span>${fb ? `<span><i>Back</i><b>${Math.round(before + fb.back)}</b></span>` : ""}</div>`;
+    const sub = [label + (line.length > 2 ? " · line of play" : ""), pinMoved() ? "" : "pin center", extra || `card ${card}`,
+      playsLikeOn(ctx.slug) ? `plays ~${plays(ctx.slug, yd)} (${meta(ctx.slug).elevationFt.toLocaleString()} ft)` : ""].filter(Boolean).join(" · ");
+    return `<div class="yrow"><div class="ybig"><b>${yd}</b><i>yd</i></div><div class="ycol">
+      <div class="fmb">${fb ? `<span><i>F</i><b>${Math.round(before + fb.front)}</b></span>` : ""}<span class="m"><i>M</i><b>${c}</b></span>${fb ? `<span><i>B</i><b>${Math.round(before + fb.back)}</b></span>` : ""}</div>
+      <div class="ysub">${esc(sub)}</div></div></div>`;
+  }
+  // Green view: just the pin, in feet on the green, in yards (and how far off the green) otherwise
+  function greenRow(from, label) {
+    const pin = pinOrCenter(h, getPin());
+    if (Geo.inRing(from, h.green)) return yardRow(from, label);
+    const fb = Geo.frontBack(h.green, from, pin), off = fb ? Math.round(fb.front) : null;
+    return `<div class="yrow"><div class="ybig"><b>${Math.round(Geo.yd(from, pin))}</b><i>yd</i></div><div class="ycol"><div class="yttl">To the pin${off != null ? ` · ${off} off the green` : ""}</div>
+      <div class="ysub">${esc(label)}${pinMoved() ? "" : " · pin at center"}</div></div></div>`;
   }
   // the line the hazard panel measures along: browse = from the tee; plan = from the start of the shot I'm setting,
   // else my last planned target; round = tee (GPS on the tee) / my GPS / my last ball. To the pin through targets ahead.
@@ -1385,75 +1421,99 @@ async function holeView(ctx) {
     rows.forEach(r => L.marker(r.c, { interactive: false, keyboard: false, zIndexOffset: 300, icon: L.divIcon({ className: "", iconSize: [0, 0],   // marker pane: stays upright on the turned map
       html: `<div class="hzlbl${r.red ? " red" : ""}">${r.F}/${r.M}/${r.B}</div>` }) }).addTo(hzLayer));
   }
-  // the bottom sheet: drag the handle up for everything, down for the map (snaps to 47% or 88% of the screen)
-  function sheetHeights() { const H = s.clientHeight || innerHeight; return [Math.round(H * 0.47), Math.round(H * 0.88)]; }
-  function setSheet(big, px) {
-    const sh = $("#sheet", s), [lo, hi] = sheetHeights(); A.sheetBig = big;
-    sh.style.height = (px ?? (big ? hi : lo)) + "px"; placeFloats();
+  // the bottom sheet has three heights, dragged between by the handle: "min" (the default: one compact block, the map
+  // gets most of the screen), "half" (adds hazards, the club strip, the plan) and "full" (everything). The last height
+  // used is remembered; a tap on the map folds it back to min.
+  let sheetState = ["min", "half", "full"].includes(prefs.sheet) ? prefs.sheet : "min";
+  function sheetHeights() {
+    const H = s.clientHeight || innerHeight;
+    return { min: sheetMin, half: Math.max(sheetMin + 120, Math.round(H * 0.5)), full: Math.round(H * 0.88) };
   }
-  // drag handling lives on the sheet itself (bound once), so a re-render mid-drag (live GPS updates) doesn't cut it off
+  function setSheet(state, px) {
+    const sh = $("#sheet", s); if (!sh) return;
+    if (state !== sheetState) { sheetState = state; prefs.sheet = state; Store.set("viewPrefs", prefs); }
+    sh.classList.toggle("min", state === "min" && px == null); if (state === "min" && px == null) sh.scrollTop = 0;
+    const hgt = px ?? sheetHeights()[state]; sh.style.height = hgt + "px"; placeFloats(hgt);
+  }
+  // drag handling lives on the sheet itself (bound once), so a re-render mid-drag (live GPS updates) doesn't cut it off.
+  // Let go: snap to the nearest height. A tap on the handle steps up (min → half → full → min).
   function bindSheetDrag(sh) {
-    if (!sh.style.height) setSheet(!!A.sheetBig);
     if (sh.dataset.drag) return; sh.dataset.drag = "1";
     let y0 = null, h0 = 0, moved = false;
     sh.addEventListener("pointerdown", e => { if (!e.target.closest(".grab")) return; y0 = e.clientY; h0 = sh.offsetHeight; moved = false; sh.classList.add("dragging"); try { sh.setPointerCapture(e.pointerId); } catch {} });
-    sh.addEventListener("pointermove", e => { if (y0 == null) return; const [lo, hi] = sheetHeights(), dy = y0 - e.clientY; if (Math.abs(dy) > 4) moved = true;
-      sh.style.height = Math.max(lo * 0.6, Math.min(hi, h0 + dy)) + "px"; placeFloats(); });
-    const up = () => { if (y0 == null) return; sh.classList.remove("dragging"); const [lo, hi] = sheetHeights();
-      setSheet(moved ? sh.offsetHeight > (lo + hi) / 2 : !A.sheetBig); y0 = null; };
+    sh.addEventListener("pointermove", e => { if (y0 == null) return; const hs = sheetHeights(), dy = y0 - e.clientY; if (Math.abs(dy) > 4) moved = true;
+      if (moved) setSheet(sheetState, Math.max(hs.min * 0.8, Math.min(hs.full, h0 + dy))); });
+    const up = () => { if (y0 == null) return; sh.classList.remove("dragging"); y0 = null;
+      if (!moved) return setSheet({ min: "half", half: "full", full: "min" }[sheetState]);
+      const hs = sheetHeights(), cur = sh.offsetHeight;
+      setSheet(Object.keys(hs).reduce((a, k) => Math.abs(hs[k] - cur) < Math.abs(hs[a] - cur) ? k : a)); };
     sh.addEventListener("pointerup", up); sh.addEventListener("pointercancel", up);
   }
   // pin presets and hints sit just above the sheet
-  function placeFloats() {
-    const hgt = $("#sheet", s)?.offsetHeight || 0;
+  function placeFloats(hgt = $("#sheet", s)?.offsetHeight || 0) {        // pass the target height: offsetHeight lags during the slide
     s.style.setProperty("--sheet-h", hgt + "px");             // the map credit line sits just above the sheet
     $("#presets", s).style.bottom = (hgt + 62) + "px"; $("#hint", s).style.bottom = (hgt + 12) + "px";
   }
+  // one short hazard line for the compact sheet: the first hazard in play, "+2" for the rest
+  function hzLineHTML(rows) {
+    if (!rows.length) return `<span class="hzline muted">No hazards</span>`;
+    const r = rows[0], what = r.f.geometry.type.includes("Polygon") ? `${r.B} carry` : `${r.F} to reach`;
+    return `<span class="hzline${r.red ? " red" : ""}">${esc(chipName(r.f))} ${what}${rows.length > 1 ? ` · +${rows.length - 1}` : ""}</span>`;
+  }
+  const sec = (label, html) => html ? `<div class="sec"><div class="seclbl">${label}</div>${html}</div>` : "";
   function renderSheet() {
     const sh = $("#sheet", s); const pin = pinOrCenter(h, getPin());
     // ball on the green: putting in feet, so the yardage hazard panel and its labels step aside
     const greenMode = ctx.mode === "round" && rh.shots?.length && Geo.inRing(measureFrom(), h.green);
     const hzRows = greenMode ? [] : hazardPanel(course, n, panelLine()); hzLabels(hzRows);
-    const hp = greenMode ? { chips: "", carry: "" } : panelHTML(hzRows, ctx.slug, hzOpen);
-    const chips = hp.chips;                                      // chips up top; the carry tip and the rest when dragged up
-    const after = hp.carry + slopeHTML() + (greenMode ? "" : pinHazardsHTML(course, n, pin));
+    const hp = greenMode ? null : panelHTML(hzRows, ctx.slug, hzOpen);
+    const hzLine = greenMode || view === "green" ? "" : hzLineHTML(hzRows);
+    const hzHalf = hp ? hp.chips + hp.carry : "";
+    const fullNotes = slopeHTML() + (greenMode ? "" : pinHazardsHTML(course, n, pin));
     $("#ydHead", s).textContent = onTeeGPS() ? `par ${h.par} · plays ${playsToday()} today (card ${card})` : `par ${h.par} · ${card} yd`;
-    const pinBtn = `<button class="btn alt" id="movePin">${tapMode === "pin" ? "Done moving pin" : ctx.mode === "plan" && !pinMoved() ? "Set pin" : "Move pin"}</button>`;
     const navBtns = done => `<div class="row"><button class="btn alt" id="pv">‹ Hole ${n > 1 ? n - 1 : NH}</button>${n < NH ? `<button class="btn" id="nx">Hole ${n + 1} ›</button>` : `<button class="btn" id="sum">${done}</button>`}</div>`;
-    let top = "", detail = "";
+    let cmp = "", half = "", full = "";
     if (ctx.mode === "browse") {
-      top += yardBlock(teeP, `${tee} tee`);
       const pk = clubPick(plays(ctx.slug, card), h.par > 3 ? "total" : "carry", h.par > 3);
-      if (pk) top += `<div class="clubrow"><div class="cn"><b>${esc(pk.name)}</b><small>${h.par > 3 ? "Tee shot" : "To the green"} · ${card} to the pin</small><span class="note">${esc(clubLine(pk.club))}</span></div></div>`;
-      top += chips + `<div class="actions">${pinBtn}</div>`;
-      detail += after;
+      if (view === "green") cmp += greenRow(teeP, `${tee} tee`);
+      else {
+        cmp += yardRow(teeP, `${tee} tee`);
+        cmp += `<div class="cline" data-open="half">${pk ? `<b>${esc(clubAbbr(pk.name) || pk.name)}</b><span>· ${h.par > 3 ? "tee shot" : `${card} to the pin`}</span>` : ""}${hzLine}</div>`;
+      }
+      if (pk) half += sec("Club", `<div class="note it">${esc(pk.name)} · ${esc(clubLine(pk.club))}</div>`);
+      half += hzHalf;
+      full += fullNotes;
     } else if (ctx.mode === "plan") {
-      top += yardBlock(teeP, `${tee} tee`, planKeys.map(k => ph[k]?.p));
-      top += `<div class="actions">${pinBtn}</div>`;
+      const tg = planKeys.map(k => ph[k]?.p);
+      cmp += view === "green" ? greenRow(planOrigin("approach"), "from your approach") : yardRow(teeP, `${tee} tee`, tg);
+      if (view !== "green") {
+        const set = planKeys.filter(k => ph[k]?.p);
+        cmp += `<div class="cline" data-open="half">${set.length ? set.map(k => `<span>${KEYNAME[k].split(" (")[0]} <b>${esc(clubAbbr(ph[k].club) || "–")}</b> ${Math.round(Geo.yd(planOrigin(k), ph[k].p))}</span>`).join(" → ") : `<span class="muted">No targets yet · drag up to plan</span>`}${hzLine}</div>`;
+      }
+      let cards = "";
       planKeys.forEach(k => {
         const t = ph[k]; const from = planOrigin(k);
         const yd = t?.p ? Math.round(Geo.yd(from, t.p)) : null;
         const warns = t?.p ? targetWarnings(course, n, from, t.p) : [];
-        top += `<div class="card" style="padding:12px;gap:8px;box-shadow:inset 0 0 0 1.5px var(--line)"><div style="display:flex;gap:8px;align-items:center"><b style="flex:1;font:700 16px var(--head)">${KEYNAME[k]}</b>
-          ${yd != null ? `<span class="num" style="font-weight:800">${yd} yd${playsTxt(ctx.slug, yd)}</span>` : '<span class="muted">not set</span>'}
+        cards += `<div class="pcard"><div class="pch"><b>${KEYNAME[k]}</b>
+          ${yd != null ? `<span class="num">${yd} yd${playsTxt(ctx.slug, yd)}</span>` : '<span class="muted">not set</span>'}
           <button class="btn small${tapMode === k ? "" : " alt"}" data-set="${k}">${t?.p ? "Move" : "Set"}</button></div>
           ${t?.p ? clubPickHTML(k, from, t) : ""}
           ${warns.map(w => `<div class="warn${w.red ? " red" : ""}">Heads up: ${esc(w.msg)}. You can keep this target.</div>`).join("")}</div>`;
       });
-      top += chips;
-      detail += after;
-      detail += `<div class="muted">Danger side${ph.dangerSet ? "" : " (suggested from nearby hazards)"}</div><div class="chips">${["short", "long", "left", "right"].map(d => `<button class="chip${ph.danger === d ? " on" : ""}" data-danger="${d}">${d}</button>`).join("")}</div>`;
+      half += sec("Your plan", cards) + hzHalf;
+      full += fullNotes;
+      full += sec(`Danger side${ph.dangerSet ? "" : " (suggested)"}`, `<div class="chips">${["short", "long", "left", "right"].map(d => `<button class="chip${ph.danger === d ? " on" : ""}" data-danger="${d}">${d}</button>`).join("")}</div>`);
       const sc = ph.score || h.par;   // shown as par until you change it or set a target
-      detail += `<div style="display:flex;gap:10px;align-items:center"><span class="muted">Planned score</span><button class="btn small alt" id="sm">−</button><b class="num" style="font:800 24px var(--head)">${sc}</b><button class="btn small alt" id="sp">+</button></div>
-        <input id="note" placeholder="Note for this hole" value="${esc(ph.note || "")}">` + navBtns("Finish plan");
+      full += sec("Planned score", `<div class="scorerow"><button class="btn small alt" id="sm">−</button><b class="num">${sc}</b><button class="btn small alt" id="sp">+</button></div>`)
+        + sec("Hole note", `<input id="note" placeholder="Note for this hole" value="${esc(ph.note || "")}">`) + navBtns("Finish plan");
     } else {
       // on the tee (no shots yet): today's tee = your GPS spot when you're on the tee box, else the course marker
       const onTee = !rh.shots?.length, gpsTee = onTeeGPS();
       const fromGPS = !onTee && gpsNear() && !rh.shots.at(-1).onGreen; const from = onTee ? teeToday() : fromGPS ? A.gps.p : ballSpot();
       const label = onTee ? (gpsTee ? `${tee} tee · your spot (GPS ±${Math.round(A.gps.acc)} yd)` : `${tee} tee`)
         : fromGPS ? `You (GPS ±${Math.round(A.gps.acc)} yd)` : rh.shots?.length > 1 ? "Your ball" : `${tee} tee`;
-      const P = roundPlan?.holes[n];
-      top += yardBlock(from, label, P ? planKeys.map(k => P[k]?.p) : [], fromGPS, gpsTee ? `<span class="ptoday">plays ${playsToday()} today / card ${card}</span>` : "");
+      const P = roundPlan?.holes[n], tg = P ? planKeys.map(k => P[k]?.p) : [];
       // plan on the tee: targets stay where you planned them; distances come from today's tee, and the first club is
       // re-picked from your bag if the new distance calls for a different one
       let repick = null, planRows = "";
@@ -1468,35 +1528,40 @@ async function holeView(ctx) {
           }
           return `<div class="planrow"><span>${KEYNAME[k]}</span><b class="num">${d} yd</b><span class="club">${esc(club || "")}</span></div>${note ? `<div class="warn">${esc(note)}</div>` : ""}`;
         });
-        planRows = `<div class="planrows"><div class="muted">Your plan${gpsTee ? " from today's tee" : ""}</div>${rows.join("")}</div>`;
-      } else if (P) planRows = `<div class="muted">Plan: ${planKeys.filter(k => P[k]?.p).map(k => `${KEYNAME[k]} ${esc(P[k].club || "")}`).join(" → ") || "no targets"}${P.danger ? ` · danger ${P.danger}` : ""}${P.score ? ` · planned ${P.score}` : ""}${P.note ? ` · “${esc(P.note)}”` : ""}</div>`;
+        planRows = `<div class="planrows">${rows.join("")}</div>`;
+      } else if (P) planRows = `<div class="muted">${planKeys.filter(k => P[k]?.p).map(k => `${KEYNAME[k]} ${esc(P[k].club || "")}`).join(" → ") || "no targets"}${P.danger ? ` · danger ${P.danger}` : ""}${P.score ? ` · planned ${P.score}` : ""}</div>`;
       const nsh = Math.max(0, (rh.shots?.length || 0) - 1);
-      const nextNo = nsh + 1;
       // the club for this shot: the planned club (re-picked when the tee moved), else My Bag's pick for the distance
-      // ahead; pre-selected once per shot, "Change club" to pick another
+      // ahead; pre-selected once per shot, picked from the club strip (half height) to change it
       const planClub = repick && nsh === 0 ? repick.to : P && planKeys[nsh] ? P[planKeys[nsh]]?.club : null;
-      const ahead = playLine(h, from, getPin(), P ? planKeys.map(k => P[k]?.p) : [])[1] || pin, teeShot = nsh === 0 && h.par > 3;
+      const ahead = playLine(h, from, getPin(), tg)[1] || pin, teeShot = nsh === 0 && h.par > 3;
       const sug = greenMode ? "Putter" : clubPick(plays(ctx.slug, Geo.yd(from, ahead)), teeShot ? "total" : "carry", teeShot)?.name;
       if (rh.clubFor !== nsh && !rh.nextClub && (planClub || sug)) { rh.nextClub = planClub || sug; rh.clubFor = nsh; }
       const cur = A.bag.find(c => c.name === rh.nextClub);
-      const tgtYd = Math.round(Geo.yd(from, ahead)), shotName = nsh === 0 ? "Tee shot" : `Shot ${nextNo}`;
+      const tgtYd = Math.round(Geo.yd(from, ahead));
       const cnote = repick && nsh === 0 ? `Tees ${card - playsToday() >= 0 ? "up" : "back"}: ${repick.from} → ${repick.to} today` : planClub && planClub !== rh.nextClub ? `Planned ${planClub}` : planClub ? "As planned" : cur ? `From your bag · ${clubLine(cur).split(" · ")[1]}` : "";
-      top += `<div class="clubrow"><div class="cn"><b>${rh.nextClub ? esc(rh.nextClub) : "No club picked"}</b><small>${shotName} · ${tgtYd} to ${ahead === pin ? "the pin" : "target"}</small>${cnote ? `<span class="note">${esc(cnote)}</span>` : ""}</div><button class="btn small alt" id="chgClub">${clubsOpen ? "Done" : "Change"}</button></div>`;
-      if (clubsOpen) top += `<div class="chips" id="clubs">${A.settings.bag.map(([c]) => `<button class="chip${rh.nextClub === c ? " on" : ""}" data-club="${esc(c)}">${esc(c)}</button>`).join("")}<button class="chip${rh.nextClub === "Putter" ? " on" : ""}" data-club="Putter">Putter</button></div>`;
-      top += chips;
       const putts = rh.shots?.at(-1)?.onGreen && rh.putts == null;
-      top += `<div class="actions">${pinBtn}${putts ? '<button class="btn big" id="logPutts">Log putts</button>' : '<button class="btn big" id="atBall">I\'m at my ball</button>'}</div>`;
-      detail += planRows + after;
-      detail += `<div class="row">${putts ? '<button class="btn alt" id="atBall">I\'m at my ball</button>' : ""}<button class="btn alt" id="tapBall">Tap ball</button><button class="btn alt" id="onGreen">On green</button></div>
-        <div class="row"><button class="btn alt" id="pen">Penalty +1${rh.penalties ? ` (${rh.penalties})` : ""}</button><button class="btn alt" id="undo">Undo</button><button class="btn alt" id="live">${A.gpsWatch !== null ? "Live GPS on" : "Live GPS"}</button></div>
-        <div style="display:flex;gap:10px;align-items:center"><span class="muted">Score</span><b class="num" style="font:800 26px var(--head)">${rh.score ?? "–"}</b><span class="muted" style="flex:1">${rh.putts != null ? `${rh.putts} putts${rh.firstPuttFt != null ? ` · first ${rh.firstPuttFt} ft${rh.leaveFt ? `, left ${rh.leaveFt} ft` : ""}` : ""}` : ""}</span>
+      const mainBtn = putts ? '<button class="btn slim" id="logPutts">Log putts</button>' : greenMode || view === "green" ? '<button class="btn slim" id="onGreen">On the green · putts</button>' : '<button class="btn slim" id="atBall">I\'m at my ball</button>';
+      if (view === "green" || greenMode) cmp += greenRow(from, label) + mainBtn;
+      else cmp += yardRow(from, label, tg, gpsTee ? `plays ${playsToday()} today / card ${card}` : "")
+        + `<div class="cline" data-open="half"><b>${rh.nextClub ? esc(clubAbbr(rh.nextClub) || rh.nextClub) : "No club"}</b><span>· ${tgtYd} to ${ahead === pin ? "the pin" : "target"}</span>${hzLine}</div>`
+        + mainBtn;
+      if (fromGPS && greenMode) half += '<div class="warn">GPS is only good to a few yards on the green. Tap "On green" to place your ball, then drag it into place.</div>';
+      half += sec(`Club${rh.nextClub ? ` · ${esc(rh.nextClub)}` : ""}`, (cnote ? `<div class="note it claret">${esc(cnote)}</div>` : "") + `<div class="clubstrip" id="clubs">${A.settings.bag.map(([c]) => `<button class="chip${rh.nextClub === c ? " on" : ""}" data-club="${esc(c)}">${esc(clubAbbr(c) || c)}</button>`).join("")}<button class="chip${rh.nextClub === "Putter" ? " on" : ""}" data-club="Putter">Putter</button></div>`);
+      half += hzHalf + sec(P && onTee && gpsTee ? "Your plan from today's tee" : "Your plan", planRows);
+      full += fullNotes + (P?.note ? sec("Hole note", `<div class="it">“${esc(P.note)}”</div>`) : "");
+      full += `<div class="row">${putts ? '<button class="btn alt small" id="atBall">I\'m at my ball</button>' : ""}<button class="btn alt small" id="tapBall">Tap ball</button><button class="btn alt small" id="onGreen">On green</button></div>
+        <div class="row"><button class="btn alt small" id="pen">Penalty +1${rh.penalties ? ` (${rh.penalties})` : ""}</button><button class="btn alt small" id="undo">Undo</button><button class="btn alt small" id="live">${A.gpsWatch !== null ? "Live GPS on" : "Live GPS"}</button></div>
+        <div class="scorerow"><span class="seclbl">Score</span><b class="num">${rh.score ?? "–"}</b><span class="muted" style="flex:1">${rh.putts != null ? `${rh.putts} putts${rh.firstPuttFt != null ? ` · first ${rh.firstPuttFt} ft${rh.leaveFt ? `, left ${rh.leaveFt} ft` : ""}` : ""}` : ""}</span>
         <button class="btn small alt" id="sm">−</button><button class="btn small alt" id="sp">+</button></div>` + navBtns("Finish round");
     }
-    sh.innerHTML = `<div class="grab" role="button" aria-label="Drag up for more"></div>${top}<div class="detail">${detail}<div class="fbrow">${feedbackLink()}</div></div>`;
+    sh.innerHTML = `<div class="grab" role="button" aria-label="Drag up for more, tap to step up"></div><div class="cmp">${cmp}</div><div class="more">${half}</div><div class="more">${full}<div class="fbrow">${feedbackLink()}</div></div>`;
+    // the compact block sets the folded height: everything above the half-height extras, plus the bottom padding
+    const c = $(".cmp", sh); sheetMin = Math.round(c.offsetTop + c.offsetHeight + parseFloat(getComputedStyle(sh).paddingBottom) + 2);
     bindSheetDrag(sh);
-    placeFloats();
+    if (!sh.classList.contains("dragging")) setSheet(sheetState);
+    sh.querySelectorAll("[data-open]").forEach(x => x.onclick = () => setSheet(x.dataset.open));
     const on = (id, f) => { const x = $("#" + id, sh); if (x) x.onclick = f; };
-    on("movePin", () => setTap(tapMode === "pin" ? null : "pin"));
     on("hzToggle", () => { hzOpen = !hzOpen; prefs.hzOpen = hzOpen; Store.set("viewPrefs", prefs); renderSheet(); });
     const setHide = v => { const all = Store.get("slopeHide:" + ctx.slug, {}); all[n] = v; Store.set("slopeHide:" + ctx.slug, all); drawAll(false); };
     on("slopeHide", () => setHide(true)); on("slopeShow", () => setHide(false));
@@ -1514,8 +1579,7 @@ async function holeView(ctx) {
       if (ph.danger === undefined) { ph.danger = suggestDanger(); persist(); }
     }
     if (ctx.mode === "round") {
-      sh.querySelectorAll("[data-club]").forEach(x => x.onclick = () => { rh.nextClub = x.dataset.club; rh.clubFor = Math.max(0, (rh.shots?.length || 0) - 1); clubsOpen = false; persist(); renderSheet(); });   // tapping a club always selects it
-      on("chgClub", () => { clubsOpen = !clubsOpen; renderSheet(); });
+      sh.querySelectorAll("[data-club]").forEach(x => x.onclick = () => { rh.nextClub = x.dataset.club; rh.clubFor = Math.max(0, (rh.shots?.length || 0) - 1); persist(); renderSheet(); });   // tapping a club always selects it
       on("atBall", () => bestFix((p, acc) => { addBall(p, "gps"); toast(`Ball marked (GPS ±${Math.round(acc)} yd). Drag-free: tap "Tap ball" to fix it.`); }));
       on("tapBall", () => setTap("ball"));
       on("onGreen", () => {
@@ -1531,11 +1595,7 @@ async function holeView(ctx) {
       on("sp", () => { rh.score = (rh.score || h.par) + 1; persist(); renderSheet(); });
     }
   }
-  // turn the map so the hole plays up the screen (tee at the bottom, green at the top)
-  const az = (a, b2) => { const d = Geo.xy(b2, a); return (Math.atan2(d[0], d[1]) * 180 / Math.PI + 360) % 360; };
-  A.holeBearing = az(teeP, h.greenCenter);
-  setBase(base); frame();
-  if (map.setBearing) { map.setBearing(-A.holeBearing * (A.bearingSign || 1)); frame(); }
+  setBase(base); aim();
 }
 
 // ---------------------------------------------------------------- plan summary, copy, switch tees

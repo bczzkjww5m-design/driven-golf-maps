@@ -312,22 +312,33 @@ function bagWarnings(bag) {
   if (bag.length > 14) out.push(`That's ${bag.length} clubs; the rules allow 14.`);
   return out;
 }
-// learning: where my logged shots finished vs my bag numbers. A logged shot ends where the ball stopped, so it's
-// compared with total (carry if no total yet). Full swings only (at least 75% of the bag number), 5+ shots.
+// learning: where my logged shots finished vs my bag numbers, full swings only (at least 75% of the bag number), 5+
+// shots, suggested when the typical shot differs by 5+ yards. A logged shot ends where the ball stopped, so all shots
+// estimate total; shots that finished on the green barely roll, so those also estimate carry.
 function bagLearning() {
-  const by = {};
+  const tot = {}, car = {};
   Store.rounds().forEach(r => Object.values(r.holes).forEach(hh => {
     const sh = hh.shots || [];
-    for (let i = 0; i < sh.length - 1; i++) { const c = sh[i].club; if (!c || c === "Putter") continue; (by[c] = by[c] || []).push(Geo.yd(sh[i].p, sh[i + 1].p)); }
+    for (let i = 0; i < sh.length - 1; i++) {
+      const c = sh[i].club; if (!c || c === "Putter") continue;
+      const d = Geo.yd(sh[i].p, sh[i + 1].p);
+      (tot[c] = tot[c] || []).push(d);
+      if (sh[i + 1].onGreen) (car[c] = car[c] || []).push(d);
+    }
   }));
-  const dismissed = Store.get("bagDismiss", {});
-  return A.bag.map(c => {
-    const now = c.total || c.carry, ds = (by[c.name] || []).filter(d => d >= 0.75 * now).sort((a, b) => a - b);
-    if (ds.length < 5) return null;
-    const med = Math.round(ds[Math.floor(ds.length / 2)]);
-    if (Math.abs(med - now) < 5 || dismissed[c.name] === med) return null;
-    return { c, med, n: ds.length };
-  }).filter(Boolean);
+  const dismissed = Store.get("bagDismiss", {}), out = [];
+  const median = ds => Math.round(ds[Math.floor(ds.length / 2)]);
+  A.bag.forEach(c => {
+    [["total", tot, c.total || c.carry], ["carry", car, c.carry]].forEach(([field, by, now]) => {
+      if (!now) return;
+      const ds = (by[c.name] || []).filter(d => d >= 0.75 * now).sort((a, b) => a - b);
+      if (ds.length < 5) return;
+      const med = median(ds);
+      if (Math.abs(med - now) < 5 || dismissed[`${c.name}:${field}`] === med || (field === "total" && dismissed[c.name] === med)) return;
+      out.push({ c, med, n: ds.length, field });
+    });
+  });
+  return out;
 }
 function profilePage() {
   const p = Store.profile(); let bag = JSON.parse(JSON.stringify(Store.bag()));
@@ -385,11 +396,13 @@ function profilePage() {
   function drawLearn() {
     const box = $("#learn", bagCard); box.innerHTML = "";
     bagLearning().forEach(sg => {
-      const it = el(`<div class="learn">Your ${esc(sg.c.name)} finishes about <b>${sg.med}</b> yards over ${sg.n} logged shots (where the ball stopped, so that's total).
-        Update its total from ${sg.c.total ?? "—"} to ${sg.med}? <div class="row"><button class="btn small">Update</button><button class="btn small alt">Not now</button></div></div>`);
+      const msg = sg.field === "carry"
+        ? `Estimate: your ${esc(sg.c.name)} carries about <b>${sg.med}</b> yards, from ${sg.n} approaches that finished on the green (they barely roll). Update its carry from ${sg.c.carry} to ${sg.med}?`
+        : `Your ${esc(sg.c.name)} finishes about <b>${sg.med}</b> yards over ${sg.n} logged shots (where the ball stopped, so that's total). Update its total from ${sg.c.total ?? "—"} to ${sg.med}?`;
+      const it = el(`<div class="learn">${msg}<div class="row"><button class="btn small">Update</button><button class="btn small alt">Not now</button></div></div>`);
       const [yes, no] = it.querySelectorAll("button");
-      yes.onclick = () => { const c = bag.find(x => x.name === sg.c.name); if (c) c.total = sg.med; drawBag(); it.remove(); toast("Updated. Save your profile to keep it."); };
-      no.onclick = () => { const d = Store.get("bagDismiss", {}); d[sg.c.name] = sg.med; Store.set("bagDismiss", d); it.remove(); };
+      yes.onclick = () => { const c = bag.find(x => x.name === sg.c.name); if (c) c[sg.field] = sg.med; drawBag(); it.remove(); toast("Updated. Save your profile to keep it."); };
+      no.onclick = () => { const d = Store.get("bagDismiss", {}); d[`${sg.c.name}:${sg.field}`] = sg.med; Store.set("bagDismiss", d); it.remove(); };
       box.appendChild(it);
     });
   }
@@ -687,10 +700,15 @@ async function holeView(ctx) {
   const planKeys = h.par === 3 ? ["approach"] : h.par === 5 ? ["teeTarget", "layup", "approach"] : ["teeTarget", "approach"];
   const KEYNAME = { teeTarget: "Tee shot", layup: "Layup", approach: h.par === 3 ? (m.teeShots === "shortgame" ? "Tee shot (short game)" : "Tee shot (approach)") : "Approach" };
   // club for a planned shot: total yards for the tee shot (tee clubs on par 4/5) and layups; carry for approaches and
-  // whenever the line has to carry a red hazard or avoid zone. Plays-like yards on altitude courses.
+  // whenever the line has to carry a bunker (fairway or greenside), a red hazard or an avoid zone. Plays-like yards.
   function pickFor(k, from, p) {
     const yd = plays(ctx.slug, Geo.yd(from, p));
-    const overHz = targetWarnings(course, n, from, p).some(w => w.msg.startsWith("line carries"));
+    const overHz = hazards(course, n).some(f => {
+      const kd = f.properties.kind;
+      if (!(kd === "bunker" || kd === "avoid" || isRed(f)) || !f.geometry.type.includes("Polygon")) return false;
+      const rc = Geo.reachCarry([from, p], f.geometry, 1);
+      return rc && rc.carry < Geo.yd(from, p) - 3;          // the ball has to fly over it to get to the target
+    });
     return clubPick(yd, k === "approach" || overHz ? "carry" : "total", k === "teeTarget" && h.par > 3);
   }
   function clubPickHTML(k, from, t) {

@@ -499,34 +499,7 @@ function practiceSessions() {           // one session = one practice page on on
     (by[k] = by[k] || { title: e.title, url: e.url, t: e.t, shots: [] }).shots.push(e); });
   return Object.values(by).sort((a, b) => b.t - a.t);
 }
-// "Your focus": one practice recommendation from the numbers already saved (simple rules, strongest signal first)
-function focusPick() {
-  const shots = practiceLogs().slice(0, 40), out = [];
-  if (shots.length >= 10) {
-    const pct = Math.round(100 * shots.filter(e => e.ft <= 6).length / shots.length);
-    const n6 = shots.filter(e => e.ft <= 6).length;
-    if (pct < 50) out.push({ w: 50 - pct, stat: `${n6}/${shots.length}`, statLabel: "inside 6 ft", title: "Chip it inside 6 feet", detail: `${pct}% of your last ${shots.length} practice chips finished inside 6 ft. Aim for half.` });
-    const short = shots.filter(e => e.along < -3).length, long = shots.filter(e => e.along > 3).length;
-    if (short > shots.length * 0.6) out.push({ w: 25, stat: `${short}/${shots.length}`, statLabel: "finished short", title: "Get chips to the hole", detail: `${short} of ${shots.length} practice chips finished short.` });
-  }
-  const holes = Store.rounds().flatMap(r => Object.values(r.holes));
-  // putting, from rounds and the practice green together
-  const ps = puttStats([...roundPuttSeqs(holes), ...practicePutts().slice(0, 60).map(sq => sq.putts)]);
-  const counted = holes.filter(h => h.putts != null), three = counted.filter(h => h.putts >= 3).length, tp = pctOf(three, counted.length);
-  if (counted.length >= 9 && tp >= 12) out.push({ w: tp, stat: `${tp}%`, statLabel: "three-putts", title: "Cut out three-putts", detail: `${three} of your last ${counted.length} holes had three putts or more. Work on lag putting and the 3–6 footers.` });
-  if (ps.lagN >= 5) { const lp = pctOf(ps.lagIn, ps.lagN); if (lp < 60) out.push({ w: (65 - lp) / 1.5, stat: `${lp}%`, statLabel: "lags inside 3 ft", title: "Lag putting from 30+ ft", detail: `${ps.lagIn} of ${ps.lagN} putts from over 30 ft finished inside 3 ft. Practice long putts to a 3-ft circle.` }); }
-  [[1, 75, "Make the 3–6 footers"], [0, 92, "Hole the short ones"], [2, 45, "Putts from 6–10 ft"]].forEach(([i, goal, title]) => { const b = ps.buckets[i]; if (b.n < 8) return;
-    const mp = pctOf(b.made, b.n); if (mp < goal) out.push({ w: (goal - mp) / 1.5, stat: `${mp}%`, statLabel: `made ${b.label}`, title, detail: `You made ${b.made} of ${b.n} putts from ${b.label}. A good target is ${goal}%.` }); });
-  const lv = holes.filter(h => h.leaveFt != null && h.putts >= 2).map(h => h.leaveFt);
-  if (lv.length >= 5) { const a = lv.reduce((x, y) => x + y, 0) / lv.length; if (a > 4) out.push({ w: 10 * (a - 4), stat: `${Math.round(a)} ft`, statLabel: "average leave", title: "Lag putting", detail: `Your first putts leave ${Math.round(a)} ft on average. Get them inside 3 ft.` }); }
-  const pp = holes.filter(h => h.putts != null).map(h => h.putts);
-  if (pp.length >= 9) { const a = pp.reduce((x, y) => x + y, 0) / pp.length; if (a > 2) out.push({ w: 20 * (a - 2), stat: a.toFixed(1), statLabel: "putts per hole", title: "Putting", detail: `${a.toFixed(1)} putts per hole over your last ${pp.length} holes.` }); }
-  return out.sort((a, b) => b.w - a.w)[0] || { stat: "–", statLabel: "", title: "Play or practice to get a focus", detail: "Log a round or a practice session, and your top thing to work on shows up here." };
-}
-
-// ---------------------------------------------------------------- Home
-const focusHTML = fc => `<div class="card focus" id="focus"><div style="text-align:center;min-width:76px"><div class="bigstat">${esc(fc.stat || "–")}</div><div class="caps" style="font-size:9.5px;color:var(--claret);margin-top:4px">${esc(fc.statLabel || "")}</div></div>
-  <div style="border-left:1px solid var(--rule);padding-left:16px"><b>${esc(fc.title)}</b><small>${esc(fc.detail)}</small></div></div>`;
+// "Your focus": the top practice prescription, always with a drill (js/drills.js: focusCard)
 // the courses as a ruled list grouped by club
 function clubList(container) {
   const clubs = [...new Set(A.index.map(c => c.name))].map(name => ({ name, courses: A.index.filter(c => c.name === name) }));
@@ -571,7 +544,7 @@ async function home() {
     $("#bk", bk).onclick = exportData; b.appendChild(bk);
   }
   b.appendChild(el(`<h2>From the practice tee</h2>`));
-  const fo = el(focusHTML(focusPick())); fo.onclick = practicePage; b.appendChild(fo);
+  focusCard(b);
   b.appendChild(el(`<h2>The courses</h2>`));
   const cl = el(`<div class="list"></div>`); clubList(cl); b.appendChild(cl);
   b.appendChild(el(`<h2>Recent</h2>`));
@@ -625,7 +598,9 @@ async function playPage() {
 async function practicePage() {
   if (!A.index.length) await loadIndex();
   const b = screen("Practice", null, "", {}, { tab: "practice" });
-  b.appendChild(el(`<h2>From the practice tee</h2>`)); b.appendChild(el(focusHTML(focusPick())));
+  b.appendChild(el(`<h2>From the practice tee</h2>`)); focusCard(b);
+  sessionBuilder(b);
+  const drillsBox = el(`<div style="display:contents"></div>`); b.appendChild(drillsBox);
   b.appendChild(el(`<h2>Practice areas</h2>`));
   const seen = new Set(), list = el(`<div class="list"></div>`);
   A.index.filter(c => c.practice && !seen.has(c.practice) && seen.add(c.practice)).forEach(c => {
@@ -635,11 +610,14 @@ async function practicePage() {
   b.appendChild(list);
   b.appendChild(el(`<h2>Recent sessions</h2>`));
   const rs = el(`<div class="list"></div>`), ses = practiceSessions().slice(0, 10);
-  if (!ses.length) rs.appendChild(el(`<p>No practice logged yet. Open a practice area, place your ball, hit, then Mark finish.</p>`));
+  drillLog().slice(-10).reverse().forEach(e => { const it = el(`<div class="item"><div class="grow"><b>${esc(e.drill)}${e.harder ? " (harder)" : ""}</b><small>${new Date(e.t).toLocaleDateString()} · drill · ${esc(scoreText(e))}${e.passed ? " · goal passed" : ""} · ${Math.max(1, Math.round(e.secs / 60))} min</small></div><span>›</span></div>`);
+    it.onclick = () => prescriptionPage(e.drill); rs.appendChild(it); });
+  if (!ses.length && !drillLog().length) rs.appendChild(el(`<p>No practice logged yet. Build a session above, or open a practice area, place your ball, hit, then Mark finish.</p>`));
   ses.forEach(p => { const in6 = p.shots.filter(e => e.ft <= 6).length, avg = Math.round(p.shots.reduce((a, e) => a + e.ft, 0) / p.shots.length);
     const it = el(`<div class="item"><div class="grow"><b>${esc(p.title)}</b><small>${new Date(p.t).toLocaleDateString()} · ${p.shots.length} shots · average ${avg} ft left · ${in6} inside 6 ft</small></div><span>›</span></div>`);
     it.onclick = () => { if (p.url) location.href = p.url; }; rs.appendChild(it); });
   b.appendChild(rs);
+  drillSections(drillsBox);
 }
 
 // ---------------------------------------------------------------- Stats: rounds (filtered per course group) and putting
@@ -1855,10 +1833,12 @@ async function holeView(ctx) {
       half += sec(`Club${rh.nextClub ? ` · ${esc(rh.nextClub)}` : ""}`, (cnote ? `<div class="note it claret">${esc(cnote)}</div>` : "") + `<div class="clubstrip" id="clubs">${A.settings.bag.map(([c]) => `<button class="chip${rh.nextClub === c ? " on" : ""}" data-club="${esc(c)}">${esc(clubAbbr(c) || c)}</button>`).join("")}<button class="chip${rh.nextClub === "Putter" ? " on" : ""}" data-club="Putter">Putter</button></div>`);
       half += hzHalf + sec(P && onTee && gpsTee ? "Your plan from today's tee" : "Your plan", planRows);
       full += fullNotes + (P?.note ? sec("Hole note", `<div class="it">“${esc(P.note)}”</div>`) : "");
-      full += `<div class="row">${putts ? '<button class="btn alt small" id="atBall">I\'m at my ball</button>' : ""}<button class="btn alt small" id="tapBall">Tap ball</button><button class="btn alt small" id="onGreen">On green</button></div>
-        <div class="row"><button class="btn alt small" id="pen">Penalty +1${rh.penalties ? ` (${rh.penalties})` : ""}</button><button class="btn alt small" id="undo">Undo</button><button class="btn alt small" id="live">${A.gpsWatch !== null ? "Live GPS on" : "Live GPS"}</button></div>
+      // every-hole controls live at half height: log a shot, putts, GPS and the score (never only at full height)
+      const hole = `<div class="row">${putts ? '<button class="btn alt small" id="atBall">I\'m at my ball</button>' : ""}<button class="btn alt small" id="tapBall">Tap ball</button>${putts ? "" : '<button class="btn alt small" id="onGreen">On green</button>'}<button class="btn alt small${A.gpsWatch !== null ? " on" : ""}" id="live">${A.gpsWatch !== null ? "GPS on" : "Live GPS"}</button></div>
         <div class="scorerow"><span class="seclbl">Score</span><b class="num">${rh.score ?? "–"}</b><span class="muted" style="flex:1">${rh.putts != null ? `${rh.putts} putts${rh.firstPuttFt != null ? ` · first ${rh.firstPuttFt} ft` : ""} <button class="linkbtn" id="redoPutts">Redo</button>` : rh.puttLog?.length ? `${rh.puttLog.length} putt${rh.puttLog.length > 1 ? "s" : ""} so far` : ""}</span>
-        <button class="btn small alt" id="sm">−</button><button class="btn small alt" id="sp">+</button></div>` + navBtns("Finish round");
+        <button class="btn small alt" id="sm">−</button><button class="btn small alt" id="sp">+</button></div>`;
+      half = sec("This hole", hole) + half;
+      full += `<div class="row"><button class="btn alt small" id="pen">Penalty +1${rh.penalties ? ` (${rh.penalties})` : ""}</button><button class="btn alt small" id="undo">Undo</button></div>` + navBtns("Finish round");
     }
     sh.innerHTML = `<div class="grab" role="button" aria-label="Drag up for more, tap to step up"></div><div class="cmp">${cmp}</div><div class="more">${half}</div><div class="more">${full}<div class="fbrow">${feedbackLink()}</div></div>`;
     // the compact block sets the folded height: everything above the half-height extras, plus the bottom padding

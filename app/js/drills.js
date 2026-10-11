@@ -32,10 +32,26 @@ function parseLib(md) {
     const c = l.split("|").slice(1, -1).map(x => x.trim()); if (c.length < 3) return;
     lib.triggers.push({ weakness: c[0], trigger: c[1], drills: c[2].split(/,\s*/).map(x => x.replace(/\s*\(.*\)\s*$/, "").trim()).filter(x => lib.drills[x]) });
   });
+  // benchmarks by handicap: | Stat | Scratch | 10 | 20 |, plus the "clearly below" margins
+  const bm = md.split(/^## Benchmarks by handicap.*$/m)[1]?.split(/^## /m)[0] || "";
+  lib.bench = {}; lib.margin = { pct: 5, putts: 1.5 };
+  const rows = bm.split("\n").filter(l => /^\|/.test(l) && !/^\|\s*-/.test(l)), head = rows[0]?.split("|").slice(2, -1).map(x => x.trim() === "Scratch" ? 0 : parseFloat(x));
+  rows.slice(1).forEach(l => { const c = l.split("|").slice(1, -1).map(x => x.trim()), key = /green/i.test(c[0]) ? "gir" : /fairway/i.test(c[0]) ? "fw" : /scrambl/i.test(c[0]) ? "scr" : /putt/i.test(c[0]) ? "putts" : null;
+    if (key) lib.bench[key] = head.map((hc, i) => [hc, parseFloat(c[i + 1])]).filter(x => !isNaN(x[0]) && !isNaN(x[1])); });
+  const mg = bm.match(/Clearly below:\*\*\s*(\d+(?:\.\d+)?) points?[^\d]*(\d+(?:\.\d+)?) putts?/i); if (mg) lib.margin = { pct: +mg[1], putts: +mg[2] };
   const ses = md.split(/^## Building a session.*$/m)[1]?.split(/^## /m)[0] || "";
   ses.split("\n").forEach(l => { const b = l.match(/^- \*\*(\d+) min:\*\* (.+)$/); if (b) lib.session[b[1]] = cap(b[2].trim()); });
   return lib;
 }
+// my handicap's benchmark for a stat: blended between the table's handicaps, carried on past the ends
+function benchFor(lib, key, hcp) {
+  const pts = lib.bench[key]; if (!pts?.length) return null;
+  const h = Math.max(0, hcp); let i = pts.findIndex(p => p[0] >= h); if (i === -1) i = pts.length - 1; if (i === 0) i = 1;
+  const [a, b] = [pts[i - 1], pts[i]], v = a[1] + (b[1] - a[1]) * (h - a[0]) / ((b[0] - a[0]) || 1);
+  return Math.max(key === "putts" ? 0 : 5, Math.round(v * 10) / 10);
+}
+const myHcp = () => { const v = parseFloat(String(A.profile.hcp ?? "").replace("+", "-")); return isNaN(v) ? null : v; };
+const hcpWords = h => { if (h === 0) return "a scratch golfer"; const t = h < 0 ? `+${Math.abs(h)}` : String(Math.round(h * 10) / 10); return `${/^(8|11|18)/.test(t) ? "an" : "a"} ${t} handicap`; };
 const weaknessOf = (lib, drill) => lib.triggers.find(t => t.drills.includes(drill))?.weakness || drill;
 // goals, read from the drill's own text: "Goal: 10 of 18 points", "complete the 5-ft ring", "within 3 of par"
 function goalOf(d, harder, variant) {
@@ -75,14 +91,17 @@ function holeFacts(course, r, n, plan) {
     F.fw = inFairway(course, n, sh[1].p);
     if (!F.fw) { const line = centerLine(h), tg = Geo.pointAt(line, Geo.along(line, sh[1].p).m); F.teeMiss = Geo.miss(sh[0].p, tg, sh[1].p).cross > 0 ? "left" : "right"; }
   }
-  F.wedge = []; F.chips = []; F.bunker = [];
+  F.wedge = []; F.chips = []; F.bunker = []; F.appr = []; F.sg = null;
   for (let i = 1; i < sh.length; i++) {
     const from = sh[i - 1].p, fin = sh[i].p, d = Geo.yd(from, pin); if (onG(from)) continue;
     const ft = i === sh.length - 1 && rh.firstPuttFt != null && onG(fin) ? rh.firstPuttFt : Math.round(Geo.m(fin, pin) * FT);
-    const sand = inBunker(from), nearGreen = Geo.distToGeom(from, greenGeom(h)) * YD <= 30;
+    const sand = inBunker(from), nearGreen = Geo.distToGeom(from, greenGeom(h)) * YD <= 30, lie = i === 1 ? "Tee" : lieOfShot(sh[i - 1]);
+    // the first short-game shot (within ~30 yd of the green): up and down = holed in 2 from there
+    if (nearGreen && !F.sg) F.sg = { lie, ud: rh.putts != null ? (sh.length - i) + rh.putts <= 2 : null, ft: onG(fin) ? ft : null };
+    if (!nearGreen && d >= 50 && d <= 250) F.appr.push({ lie, on: onG(fin), ft: onG(fin) ? ft : null });
     if (sand && Geo.distToGeom(from, greenGeom(h)) * YD <= 40) { F.bunker.push({ stayed: inBunker(fin), ft: onG(fin) ? ft : null }); F.sandOpp = true; }
     else if (d >= 40 && d <= 110) F.wedge.push({ ft, along: Geo.miss(from, pin, fin).along });
-    else if (nearGreen && d < 50 && onG(fin)) F.chips.push(ft);
+    else if (nearGreen && d < 50 && onG(fin)) F.chips.push({ ft, lie });
   }
   if (F.sandOpp && rh.score != null) F.sandSave = rh.score <= h.par;
   const k = h.par - 2;                                       // the green-in-regulation stroke
@@ -114,7 +133,8 @@ const CHECKS = {
   "Lag Ladder": { label: "average leave", unit: "ft", lowerBetter: true, v: hs => avg(fx(hs, h => h.lagLeave != null ? [h.lagLeave] : [])) },
   "Clock Drill": { label: "make rate from 3–6 ft", unit: "%", v: hs => { const b = puttStats(fx(hs, h => h.putts ? [h.putts] : [])).buckets[1]; return b.n ? 100 * b.made / b.n : null; } },
   "Start-Line Gate": { label: "make rate from 3–10 ft", unit: "%", v: hs => { const s = puttStats(fx(hs, h => h.putts ? [h.putts] : [])), n = s.buckets[1].n + s.buckets[2].n; return n ? 100 * (s.buckets[1].made + s.buckets[2].made) / n : null; } },
-  "Landing Spot Towel": { label: "average chip finish", unit: "ft", lowerBetter: true, v: hs => avg(fx(hs, h => h.chips)) },
+  "Landing Spot Towel": { label: "average chip finish from the fringe and fairway", unit: "ft", lowerBetter: true, v: hs => avg(fx(hs, h => h.chips.filter(c => ["Fringe", "Fairway"].includes(c.lie)).map(c => c.ft))) },
+  "Rough Chip Circuit": { label: "up-and-down rate from the rough", unit: "%", v: hs => { const o = hs.filter(h => h.sg?.lie === "Rough" && h.sg.ud != null); return o.length ? 100 * o.filter(h => h.sg.ud).length / o.length : null; } },
   "Up-and-Down Circuit": { label: "scrambling", unit: "%", v: hs => { const o = hs.filter(h => h.scramble != null); return o.length ? 100 * o.filter(h => h.scramble).length / o.length : null; } },
   "Bunker Line Drill": { label: "sand saves", unit: "%", v: hs => { const o = hs.filter(h => h.sandSave != null); return o.length ? 100 * o.filter(h => h.sandSave).length / o.length : null; } },
   "Wedge Ladder": { label: "average finish from 40–110 yd", unit: "ft", lowerBetter: true, v: hs => avg(fx(hs, h => h.wedge.map(w => w.ft))) },
@@ -128,21 +148,30 @@ const fmtStat = (v, unit) => v == null ? "–" : unit === "%" ? `${Math.round(v)
 // each trigger from the library's table, measured on my last 10 rounds plus the practice pages. sev: how far past the line.
 async function prescriptions() {
   const lib = await drillLib(), rf = (await roundFacts()).slice(-10), hs = rf.flatMap(r => r.holes), out = [];
+  const hcp = myHcp(), hc = hcp ?? 20, who = hcp != null ? hcpWords(hcp) : "a 20 handicap (add your index in Member Profile)";
+  const B = k => benchFor(lib, k, hc), M = lib.margin;
   const add = (weakness, sev, why, stat, statLabel) => { const t = lib.triggers.find(x => x.weakness === weakness); if (!t || !t.drills.length || sev <= 0) return;
     out.push({ weakness, drill: t.drills[0], drills: t.drills, time: lib.drills[t.drills[0]].time, sev, why, stat, statLabel }); };
   // putting: rounds + the practice green
   const pseqs = [...fx(hs, h => h.putts ? [h.putts] : []), ...practicePutts().slice(0, 60).map(s => s.putts)];
   const leaves = pseqs.filter(s => s[0]?.ft >= 20).map(s => s[1]?.ft ?? (s[0].made ? 0 : null)).filter(x => x != null), lv = avg(leaves);
   const threes = hs.filter(h => h.three != null), tp = threes.length ? 100 * threes.filter(h => h.three).length / threes.length : null;
+  const ph = hs.filter(h => h.putts), ppr = ph.length ? 18 * avg(ph.map(h => h.putts.length)) : null;
   if (leaves.length >= 5 && lv > 4) add("Lag putting", (lv - 4) / 4, `Your first putts from 20+ ft finish ${lv.toFixed(1)} ft away on average (${leaves.length} putts).`, `${lv.toFixed(1)} ft`, "average leave");
+  else if (ph.length >= 9 && B("putts") != null && ppr >= B("putts") + M.putts) add("Lag putting", (ppr - B("putts")) / 4, `Putting: ${ppr.toFixed(1)} putts per round vs about ${B("putts")} for ${who}.`, ppr.toFixed(1), "putts per round");
   else if (threes.length >= 9 && tp > 10) add("Lag putting", (tp - 10) / 10, `You three-putt ${Math.round(tp)}% of holes (${threes.filter(h => h.three).length} of ${threes.length}).`, `${Math.round(tp)}%`, "three-putts");
   const b36 = puttStats(pseqs).buckets[1], m36 = b36.n ? 100 * b36.made / b36.n : null;
   if (b36.n >= 8 && m36 < 80) add("Short putts", (80 - m36) / 40, `You make ${Math.round(m36)}% of your putts from 3–6 ft (${b36.made} of ${b36.n}).`, `${Math.round(m36)}%`, "made 3–6 ft");
   // chips: round chips from around the green plus the practice pages' chips
-  const chips = [...fx(hs, h => h.chips), ...practiceLogs().slice(0, 40).map(e => e.ft)], ca = avg(chips);
-  if (chips.length >= 10 && ca > 6) add("Chip distance control", (ca - 6) / 6, `Your chips finish ${ca.toFixed(1)} ft from the hole on average (${chips.length} chips).`, `${ca.toFixed(1)} ft`, "average chip");
+  // chips by lie: fringe and fairway (and practice chips without a lie) for distance control; the rough for the Rough Chip Circuit
+  const pchips = practiceLogs().slice(0, 40), chips = [...fx(hs, h => h.chips.filter(c => ["Fringe", "Fairway"].includes(c.lie)).map(c => c.ft)), ...pchips.filter(e => !e.lie || ["Fringe", "Fairway"].includes(e.lie)).map(e => e.ft)], ca = avg(chips);
+  if (chips.length >= 10 && ca > 6) add("Chip distance control", (ca - 6) / 6, `Your chips from the fringe and fairway finish ${ca.toFixed(1)} ft from the hole on average (${chips.length} chips).`, `${ca.toFixed(1)} ft`, "average chip");
+  const rsg = hs.filter(h => h.sg?.lie === "Rough" && h.sg.ud != null), rud = rsg.length ? 100 * rsg.filter(h => h.sg.ud).length / rsg.length : null;
+  const rft = [...fx(hs, h => h.chips.filter(c => c.lie === "Rough").map(c => c.ft)), ...pchips.filter(e => e.lie === "Rough").map(e => e.ft)], rfa = avg(rft);
+  if (rsg.length >= 5 && rud < 50) add("Chips from the rough", (50 - rud) / 50, `You got up and down from the rough ${rsg.filter(h => h.sg.ud).length} of ${rsg.length} times (${Math.round(rud)}%).`, `${Math.round(rud)}%`, "up & down, rough");
+  else if (rft.length >= 5 && rfa > 8) add("Chips from the rough", (rfa - 8) / 8, `Your chips from the rough finish ${rfa.toFixed(1)} ft from the hole on average (${rft.length} chips).`, `${rfa.toFixed(1)} ft`, "rough chips");
   const sc = hs.filter(h => h.scramble != null), sp = sc.length ? 100 * sc.filter(h => h.scramble).length / sc.length : null;
-  if (sc.length >= 5 && sp < 50) add("Overall short game / scrambling", (50 - sp) / 50, `You got up and down on ${sc.filter(h => h.scramble).length} of ${sc.length} missed greens (${Math.round(sp)}%).`, `${Math.round(sp)}%`, "scrambling");
+  if (sc.length >= 5 && sp <= B("scr") - M.pct) add("Overall short game / scrambling", (B("scr") - sp) / B("scr"), `Scrambling: ${Math.round(sp)}% vs about ${Math.round(B("scr"))}% for ${who} (${sc.filter(h => h.scramble).length} of ${sc.length} missed greens).`, `${Math.round(sp)}%`, "scrambling");
   const bk = fx(hs, h => h.bunker), bad = bk.filter(b => b.stayed || (b.ft != null && b.ft > 15)).length;
   if (bk.length >= 3 && bad / bk.length >= 0.34) add("Bunker play", bad / bk.length, `${bad} of your ${bk.length} greenside bunker shots stayed in the sand or finished over 15 ft away.`, `${bad}/${bk.length}`, "bunker shots");
   const wg = fx(hs, h => h.wedge), wa = avg(wg.map(w => w.ft)), sh = wg.filter(w => w.along < -3).length, lo = wg.filter(w => w.along > 3).length;
@@ -150,11 +179,11 @@ async function prescriptions() {
     wa > 20 ? `Your wedges from 40–110 yd finish ${Math.round(wa)} ft from the pin on average (${wg.length} shots).` : `${Math.max(sh, lo)} of your ${wg.length} wedges from 40–110 yd finished ${sh > lo ? "short" : "long"}.`, `${Math.round(wa)} ft`, "wedge finish");
   const gr = hs.filter(h => h.gir != null), gp = gr.length ? 100 * gr.filter(h => h.gir).length / gr.length : null, am = fx(hs, h => h.apMiss ? [h.apMiss] : []);
   const amTop = ["left", "right", "short", "long"].map(s => [s, am.filter(x => x === s).length]).sort((a, b) => b[1] - a[1])[0];
-  if (gr.length >= 9 && gp < 50) add("Approach accuracy", (50 - gp) / 50, `You hit ${Math.round(gp)}% of greens in regulation (${gr.filter(h => h.gir).length} of ${gr.length}).`, `${Math.round(gp)}%`, "greens hit");
+  if (gr.length >= 9 && gp <= B("gir") - M.pct) add("Approach accuracy", (B("gir") - gp) / B("gir"), `Greens: ${Math.round(gp)}% vs about ${Math.round(B("gir"))}% for ${who} (${gr.filter(h => h.gir).length} of ${gr.length} holes).`, `${Math.round(gp)}%`, "greens hit");
   else if (am.length >= 6 && amTop[1] / am.length >= 0.65) add("Approach accuracy", 0.3, `${amTop[1]} of your ${am.length} missed approaches went ${amTop[0]}.`, `${amTop[1]}/${am.length}`, `misses ${amTop[0]}`);
   const fw = hs.filter(h => h.fw != null), fp = fw.length ? 100 * fw.filter(h => h.fw).length / fw.length : null, tm = fx(hs, h => h.teeMiss ? [h.teeMiss] : []);
   const tl = tm.filter(x => x === "left").length, tr = tm.length - tl;
-  if (fw.length >= 7 && fp < 60) add("Tee shot accuracy", (60 - fp) / 60, `You hit ${Math.round(fp)}% of fairways (${fw.filter(h => h.fw).length} of ${fw.length}).`, `${Math.round(fp)}%`, "fairways");
+  if (fw.length >= 7 && fp <= B("fw") - M.pct) add("Tee shot accuracy", (B("fw") - fp) / B("fw"), `Fairways: ${Math.round(fp)}% vs about ${Math.round(B("fw"))}% for ${who} (${fw.filter(h => h.fw).length} of ${fw.length}).`, `${Math.round(fp)}%`, "fairways");
   else if (tm.length >= 5 && Math.max(tl, tr) / tm.length >= 0.7) add("Tee shot accuracy", 0.3, `${Math.max(tl, tr)} of your ${tm.length} missed fairways went ${tl > tr ? "left" : "right"}.`, `${Math.max(tl, tr)}/${tm.length}`, `misses ${tl > tr ? "left" : "right"}`);
   const dm = hs.filter(h => h.dangerMiss != null), dn = dm.filter(h => h.dangerMiss).length;
   if (dm.length >= 5 && dn >= 3 && dn / dm.length >= 0.3) add("Course management", dn / dm.length, `${dn} of your ${dm.length} planned approaches missed to the danger side.`, `${dn}/${dm.length}`, "danger-side misses");
@@ -188,7 +217,7 @@ async function prescriptionPage(name, rx, back) {
     ${sec(2, "The drill", `<div class="rxname">${esc(d.name)}</div><div class="muted">${esc(d.time)} · ${esc(d.area)}</div>`)}
     ${sec(3, "Setup", ol(d.setup))}
     ${sec(4, "How to do it", ol(d.how) + (d.Cue ? `<div class="carry">${mdInline(d.Cue)}</div>` : ""))}
-    ${sec(5, "Score and goal", `<p>${mdInline(d.scoring)}</p><p><b>Goal:</b> ${mdInline(d.goalText)}</p>`)}
+    ${sec(5, "Score and goal", `<p>${mdInline(cap(d.scoring))}</p><p><b>Goal:</b> ${mdInline(d.goalText)}</p>`)}
     ${sec(6, "Make it harder", unlocked ? `<div class="pill ok">Unlocked</div><p>${mdInline(d.Harder)}</p>`
       : `<p class="muted">Unlocks after you pass the goal in 2 sessions in a row${streak ? ` (${streak} of 2 so far)` : ""}.</p>`)}
     ${d["Course check"] ? `<div class="rxcheck"><span class="seclbl">Course check</span> ${mdInline(d["Course check"])}<div id="cc" class="it"></div></div>` : ""}
@@ -207,7 +236,7 @@ async function courseCheck(name) {
   const lib = await drillLib(), d = lib.drills[name], ck = CHECKS[name], first = drillLog().find(e => e.drill === name);
   if (!first) return null;
   const w = weaknessOf(lib, name);
-  if (!ck) return `${w}: rounds don't record lies yet, so there's no course stat to compare for the ${d.name}.`;
+  if (!ck) return `${w}: there's no course stat to compare for the ${d.name} yet.`;
   const rf = await roundFacts(), before = rf.filter(r => r.date < first.t).slice(-3), after = rf.filter(r => r.date >= first.t).slice(0, 3);
   const vb = ck.v(before.flatMap(r => r.holes)), va = ck.v(after.flatMap(r => r.holes));
   if (vb == null && va == null) return `${w}: no ${ck.label} from your rounds yet. Log shots and putts in your next rounds to compare.`;
@@ -388,4 +417,18 @@ async function drillSections(b) {
   prog.appendChild(el(`<h2>Course check</h2>`));
   const cc = el(`<div class="card"></div>`); prog.appendChild(cc);
   for (const n of practiced) { const t = await courseCheck(n); if (t) cc.appendChild(el(`<p class="cc">${esc(t)}</p>`)); }
+}
+
+// ---------------------------------------------------------------- stats by lie (Record page)
+async function lieStatsCard(container) {
+  const card = el(`<div class="card"><p class="muted it">Reading your rounds…</p></div>`); container.appendChild(card);
+  const hs = (await roundFacts()).flatMap(r => r.holes), pct = (a, n) => n ? `${Math.round(100 * a / n)}% <small class="muted">${a}/${n}</small>` : "–";
+  const ftAvg = xs => xs.length ? `${Math.round(avg(xs))} ft` : "–";
+  const sg = L => hs.filter(h => h.sg?.lie === L), ap = L => fx(hs, h => h.appr.filter(a => a.lie === L));
+  const unknown = hs.filter(h => h.sg?.lie === "unknown").length + fx(hs, h => h.appr.filter(a => a.lie === "unknown")).length;
+  card.innerHTML = `<div class="seclbl">Around the green, by lie</div><div class="tablewrap"><table class="t"><tr><th>Lie</th><th>Up and down</th><th>Proximity</th></tr>
+    ${["Fairway", "Rough", "Fringe", "Sand"].map(L => { const o = sg(L).filter(h => h.sg.ud != null); return `<tr><td>${L}</td><td>${pct(o.filter(h => h.sg.ud).length, o.length)}</td><td>${ftAvg(sg(L).map(h => h.sg.ft).filter(x => x != null))}</td></tr>`; }).join("")}</table></div>
+    <div class="seclbl">Approaches (50–250 yd), by lie</div><div class="tablewrap"><table class="t"><tr><th>Lie</th><th>Green hit</th><th>Proximity</th></tr>
+    ${["Fairway", "Rough"].map(L => { const o = ap(L); return `<tr><td>${L}</td><td>${pct(o.filter(a => a.on).length, o.length)}</td><td>${ftAvg(o.map(a => a.ft).filter(x => x != null))}</td></tr>`; }).join("")}</table></div>
+    <p class="muted">Up and down = in the hole in 2 from your first shot within about 30 yd of the green.${unknown ? ` ${unknown} shot${unknown > 1 ? "s" : ""} from older rounds have no lie and aren't counted.` : ""}</p>`;
 }

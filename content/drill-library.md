@@ -28,16 +28,29 @@ Then a **course check**: the stat the app will watch in the next rounds to see w
 
 | Weakness (from round or practice data) | Trigger (suggested) | Drills |
 |---|---|---|
-| Lag putting | First-putt leave > 4 ft from 20+ ft, or 3-putts > 10% of holes | Lag Ladder |
+| Lag putting | First-putt leave > 4 ft from 20+ ft, putts per round clearly above your handicap's benchmark, or 3-putts > 10% of holes | Lag Ladder |
 | Short putts | Make rate from 3–6 ft below 80% | Clock Drill, Start-Line Gate |
 | Chips from the rough | Up-and-down from rough lies below 50%, or rough chips finishing > 8 ft | Rough Chip Circuit |
 | Chip distance control | Chips from fringe or fairway finishing > 6 ft on average | Landing Spot Towel |
-| Overall short game / scrambling | Scrambling below 50% | Up-and-Down Circuit (9-spot or 30-minute) |
+| Overall short game / scrambling | Scrambling clearly below your handicap's benchmark | Up-and-Down Circuit (9-spot or 30-minute) |
 | Bunker play | Bunker shots leaving the ball in the bunker, or finishing > 15 ft | Bunker Line Drill |
 | Wedge distances (40–110 yd) | Wedge approaches finishing > 20 ft on average, or mostly short/long | Wedge Ladder |
-| Approach accuracy | Greens in regulation below target, or misses mostly one side | Nine-Ball Target Game |
-| Tee shot accuracy | Fairways or "in play" below 60%, or misses mostly one side | Fairway Corridor |
+| Approach accuracy | Greens in regulation clearly below your handicap's benchmark, or misses mostly one side | Nine-Ball Target Game |
+| Tee shot accuracy | Fairways clearly below your handicap's benchmark, or misses mostly one side | Fairway Corridor |
 | Course management | Plan-vs-actual shows repeated misses to the danger side | Play the Course on the Range |
+
+## Benchmarks by handicap
+
+Approximate starting targets. The app blends between columns for other handicaps (an 8 handicap's greens target is about 40%) and uses your index from Member Profile (20 if none is set). Edit the numbers to adjust them.
+
+| Stat | Scratch | 10 | 20 |
+|---|---|---|---|
+| Greens in regulation (%) | 60 | 35 | 18 |
+| Fairways hit (%) | 60 | 50 | 42 |
+| Scrambling (%) | 50 | 30 | 18 |
+| Putts per round | 30 | 33 | 35 |
+
+**Clearly below:** 5 points under the benchmark for percentages, or 1.5 putts over for putts per round.
 
 ## The drills
 

@@ -116,6 +116,9 @@
   #result b { font: 300 48px/1 var(--head); }
   #result .miss { font: italic 400 17px var(--head); color: var(--flag); }
   .panel { background: var(--chalk); border-top: 3px double var(--brass); border-radius: 0; padding-top: 14px; gap: 10px; }
+  /* the lie for each chip, defaulting to the last one used */
+  .lies { display: flex; gap: 6px; align-items: center; } .lies .lbl { font: 600 10.5px "Jost", system-ui; letter-spacing: .2em; text-transform: uppercase; color: var(--muted); margin-right: 4px; }
+  .lies .small { flex: 1; min-height: 36px; }
   /* putting: one putt at a time, the same steps as Log putts in a round */
   #puttSheet { position: fixed; inset: 0; z-index: 3000; background: #1B1B1873; display: flex; align-items: flex-end; }
   #puttSheet .pflow { background: var(--chalk); width: 100%; border-top: 3px double var(--brass); padding: 18px 16px calc(env(safe-area-inset-bottom, 0px) + 16px);
@@ -158,6 +161,7 @@
 </div>
 <div class="panel">
   <div class="readout"><b id="yd">—</b><span id="ydLabel"></span></div>
+  <div class="lies" id="lieRow" aria-label="Lie"></div>
   <div class="row">
     <button class="big" id="gpsBtn">I'm at my ball</button>
     <button class="big alt" id="finishBtn" disabled>Mark finish</button>
@@ -197,7 +201,9 @@ let pins = load(":pins", []);             // [{id, lat, lng}]
 let selectedId = load(":sel", null);
 let ball = load(":ball", null);           // {lat, lng, src, acc}
 let log = load(":log", []);
-let putts = load(":putts", []);           // putting tries: [{id, t, green, hole, putts:[{ft, made, miss}]}] (read by the app's stats)
+let putts = load(":putts", []);
+const LIES = ["Fringe", "Fairway", "Rough", "Sand"];
+let lie = load(":lie", "Fringe");                 // the lie for the next chip: the last one used           // putting tries: [{id, t, green, hole, putts:[{ft, made, miss}]}] (read by the app's stats)
 let base = load(":base", "map");
 let view = "shot";
 let mode = "ball";                        // what a tap does: ball | add | move | finish
@@ -429,12 +435,12 @@ function finishShot(ll) {
   const miss = ft < 1 ? "In or tap-in" : parts.length ? parts.join(" · ") : "On line";
   const entry = { id: Date.now().toString(36), t: Date.now(), pinId: sp.id, hole: pinNo(sp), green: greenAt(sp).label,
     yd: Math.round(len * M_TO_YD), ft: +ft.toFixed(1), along: +along.toFixed(1), cross: +cross.toFixed(1), miss,
-    ball: { lat: ball.lat, lng: ball.lng }, pin: { lat: sp.lat, lng: sp.lng }, finish: { lat: ll.lat, lng: ll.lng } };
+    ball: { lat: ball.lat, lng: ball.lng }, pin: { lat: sp.lat, lng: sp.lng }, finish: { lat: ll.lat, lng: ll.lng }, lie };
   log.push(entry); save(":log", log);
   mode = "ball"; $("finishBtn").classList.remove("active");
   draw(); refresh();
   const box = $("result");
-  box.innerHTML = `<b>${fmtFt(ft)}</b><div>left from ${entry.yd} yd · hole ${entry.hole}</div><div class="miss">${miss}</div>`;
+  box.innerHTML = `<b>${fmtFt(ft)}</b><div>left from ${entry.yd} yd · ${lie.toLowerCase()} · hole ${entry.hole}</div><div class="miss">${miss}</div>`;
   box.hidden = false;
   clearTimeout(finishShot.t);
   finishShot.t = setTimeout(() => { box.hidden = true; setView("shot"); }, 2500);
@@ -461,6 +467,9 @@ function refresh() {
   // ball on a green with a hole picked: putting instead of a chip
   const onGreen = !!(ball && sp && greens.some(g => inRing(ball, g.ring)));
   $("puttBtn").hidden = !onGreen; $("finishBtn").hidden = onGreen;
+  const lr = $("lieRow"); lr.hidden = onGreen;
+  lr.innerHTML = '<span class="lbl">Lie</span>' + LIES.map(l => `<button class="small${l === lie ? " active" : ""}" data-lie="${l}">${l}</button>`).join("");
+  lr.querySelectorAll("[data-lie]").forEach(b => b.onclick = () => { lie = b.dataset.lie; save(":lie", lie); refresh(); });
   $("hintText").textContent = HINTS[mode]();
   $("hintCancel").hidden = mode === "ball";
   readout();
@@ -642,7 +651,7 @@ function renderLog() {
   [...log].reverse().forEach(s => {
     const row = document.createElement("div"); row.className = "entry";
     const time = new Date(s.t).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-    row.innerHTML = `<div class="what"><span class="ft">${fmtFt(s.ft)}</span> from ${s.yd} yd · ${s.miss}
+    row.innerHTML = `<div class="what"><span class="ft">${fmtFt(s.ft)}</span> from ${s.yd} yd${s.lie ? ` (${s.lie.toLowerCase()})` : ""} · ${s.miss}
       <small>${time} · hole ${s.hole}, ${s.green}</small></div>`;
     const del = document.createElement("button"); del.textContent = "Delete";
     del.onclick = () => {

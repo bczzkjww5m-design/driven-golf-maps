@@ -6,7 +6,7 @@
 <title>Driven Golf</title>
 <!-- script ?v= matches APP_VERSION in js/store.js: bump both on every release so phones never mix old and new files -->
 <!-- home-screen app: "Add to Home Screen" opens full screen as "Driven Golf" -->
-<link rel="manifest" href="manifest.webmanifest?v=0.9.5-beta">
+<link rel="manifest" href="manifest.webmanifest?v=0.9.6-beta">
 <meta name="theme-color" content="#1E3A2B">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -257,6 +257,12 @@
   .seslist li > div { display: inline-flex; flex-direction: column; width: calc(100% - 60px); vertical-align: top; } .seslist li small { color: var(--muted); font-size: 13px; }
   .seslist li .num { float: right; color: var(--brass); font-family: var(--head); }
   .cc { font: italic 400 15px/1.4 var(--head) !important; color: var(--ink) !important; }
+  .lierow { display: flex; align-items: center; gap: 8px; font-size: 13px; min-height: 26px; }
+  .liechip { all: unset; cursor: pointer; border: 1px solid var(--hunter); color: var(--hunter); padding: 2px 9px; font: 500 13px var(--head); }
+  .liechip.guess { border-style: dashed; border-color: var(--brass); color: var(--claret); font-style: italic; }
+  .liealt { all: unset; cursor: pointer; color: var(--claret); font: 500 13px var(--text); text-decoration: underline; text-underline-offset: 3px; padding: 4px 2px; }
+  .undobar { left: 12px; right: 12px; background: var(--hunter); color: var(--ivory); border: 1px solid var(--brass); padding: 8px 12px; display: flex; align-items: center; gap: 12px; font-size: 14px; z-index: 720; }
+  .undobar span { flex: 1; } .undobar button { all: unset; cursor: pointer; color: var(--brass); font: 600 12px var(--text); letter-spacing: .18em; text-transform: uppercase; min-height: 32px; padding: 0 4px; }
   .pflow { display: flex; flex-direction: column; gap: 10px; } .pflow .row .btn { text-transform: uppercase; }
   .hzlist { display: flex; flex-direction: column; }
   .hzlist .hl { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; font-size: 14px; }
@@ -328,9 +334,9 @@
 </head>
 <body>
 <div id="app"></div>
-<script src="js/geo.js?v=0.9.5-beta"></script>
-<script src="js/store.js?v=0.9.5-beta"></script>
-<script src="js/drills.js?v=0.9.5-beta"></script>
-<script src="js/app.js?v=0.9.5-beta"></script>
+<script src="js/geo.js?v=0.9.6-beta"></script>
+<script src="js/store.js?v=0.9.6-beta"></script>
+<script src="js/drills.js?v=0.9.6-beta"></script>
+<script src="js/app.js?v=0.9.6-beta"></script>
 </body>
 </html>

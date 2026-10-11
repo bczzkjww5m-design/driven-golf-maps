@@ -4,6 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <title>Driven Golf</title>
+<!-- script ?v= matches APP_VERSION in js/store.js: bump both on every release so phones never mix old and new files -->
+<!-- home-screen app: "Add to Home Screen" opens full screen as "Driven Golf" -->
+<link rel="manifest" href="manifest.webmanifest?v=0.9.0-beta">
+<meta name="theme-color" content="#1f4d2b">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Driven Golf">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icons/favicon.png">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/leaflet-rotate@0.2.8/dist/leaflet-rotate-src.js"></script>
@@ -106,6 +116,8 @@
   .bagrow .r2 label { display: flex; flex-direction: column; font-size: 11px; color: var(--muted); } .bagrow .r2 input[type=number] { width: 72px; }
   .bagrow .roll, .bagrow .sl { font-size: 12px; color: var(--muted); min-width: 60px; } .bagrow .chk { flex-direction: row !important; align-items: center; gap: 4px; font-size: 13px !important; color: var(--ink) !important; }
   .learn { background: #e3ecfb; color: #1d4fa8; border-radius: 9px; padding: 8px 10px; font-size: 13px; display: flex; flex-direction: column; gap: 6px; }
+  .bar .fb { margin-left: auto; color: var(--chalk); opacity: .8; font: 600 12px system-ui; text-decoration: underline; }
+  .fbrow { text-align: center; padding: 6px 0 2px; } .fbrow .fb { color: var(--muted); font: 600 12px system-ui; }
   .hzp { display: flex; flex-direction: column; gap: 3px; }
   .hzh { display: flex; gap: 8px; align-items: baseline; } .hzh .muted { flex: 1; font-size: 11px; }
   .linkbtn { all: unset; cursor: pointer; color: var(--turf-2); font: 600 13px system-ui; }
@@ -141,8 +153,8 @@
 </head>
 <body>
 <div id="app"></div>
-<script src="js/geo.js"></script>
-<script src="js/store.js"></script>
-<script src="js/app.js"></script>
+<script src="js/geo.js?v=0.9.0-beta"></script>
+<script src="js/store.js?v=0.9.0-beta"></script>
+<script src="js/app.js?v=0.9.0-beta"></script>
 </body>
 </html>

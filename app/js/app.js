@@ -130,7 +130,7 @@ const panelName = f => { const p = f.properties;
   return p.kind === "avoid" ? (p.name || "Avoid zone") : p.kind === "water" ? (p.sub === "lateral" ? "Lateral water" : "Water")
     : p.kind === "bunker" ? (p.sub === "greenside" ? "Greenside bunker" : "Fairway bunker") : "OB"; };
 function hazardPanel(course, n, line) {
-  const from = line[0], reach = Math.max(...A.bag.map(c => c.total || c.carry)) + 20, rows = [];   // in plays-like yards (altitude)
+  const from = line[0], reach = (A.bag.length ? Math.max(...A.bag.map(c => c.total || c.carry || 0)) : 250) + 20, rows = [];   // no bag yet: about 250   // in plays-like yards (altitude)
   hazards(course, n).filter(f => PANEL_KINDS.includes(f.properties.kind)).forEach(f => {
     const g = f.geometry, poly = g.type.includes("Polygon");
     const dir = Geo.xy(line[1], from);                     // which way I'm hitting: parts behind me aren't in play
@@ -152,7 +152,8 @@ function hazardPanel(course, n, line) {
 // there). Only areas you fly over: an OB line or fence is a boundary, not something to carry.
 function carryClub(rows, slug) {
   const r = rows.find(x => x.side === "crossing" && x.B > 0 && x.f.geometry.type.includes("Polygon")); if (!r) return null;
-  const need = plays(slug, r.B), bag = A.settings.bag.slice().sort((a, b) => a[1] - b[1]);
+  const need = plays(slug, r.B), bag = A.settings.bag.filter(c => c[1] > 0).slice().sort((a, b) => a[1] - b[1]);
+  if (!bag.length) return null;                               // no bag numbers yet
   const club = bag.find(([, d]) => d >= need);
   return { r, txt: club ? `Carry ${panelName(r.f).toLowerCase()} ${r.B} → ${club[0]} (${club[1]} carry)` : `Carry ${panelName(r.f).toLowerCase()} ${r.B} → beyond your longest club (${bag.at(-1)[0]} ${bag.at(-1)[1]})` };
 }
@@ -184,9 +185,18 @@ function targetWarnings(course, n, from, target) {
 }
 
 // ---------------------------------------------------------------- screens
-function screen(title, back, body) {
-  app.innerHTML = "";
-  const s = el(`<div class="screen"><div class="bar">${back ? '<button class="back" aria-label="Back">‹</button>' : ""}<h1>${esc(title)}</h1></div><div class="body"></div></div>`);
+// ---- feedback: a pre-filled email with the app version and where the tester was
+A.where = { screen: "Home" };
+function feedbackHref() {
+  const w = A.where || {}, m = w.course ? meta(w.course) : null;
+  const body = [`App version: ${APP_VERSION}`, `Screen: ${w.screen || "?"}`, m ? `Course: ${m.name} · ${m.course}` : "Course: —", `Hole: ${w.hole || "—"}`,
+    `Phone: ${navigator.userAgent}`, "", "What happened, and what did you expect?", ""].join("\n");
+  return `mailto:aaronweinard@gmail.com?subject=${encodeURIComponent(`Driven Golf feedback (${APP_VERSION})`)}&body=${encodeURIComponent(body)}`;
+}
+const feedbackLink = () => `<a class="fb" href="${feedbackHref()}">Feedback</a>`;
+function screen(title, back, body, where = {}) {
+  app.innerHTML = ""; A.where = { screen: title, ...where };
+  const s = el(`<div class="screen"><div class="bar">${back ? '<button class="back" aria-label="Back">‹</button>' : ""}<h1>${esc(title)}</h1>${feedbackLink()}</div><div class="body"></div></div>`);
   if (back) $(".back", s).onclick = back;
   app.appendChild(s); stopMap();
   const b = $(".body", s); if (typeof body === "string") b.innerHTML = body; return b;
@@ -201,6 +211,11 @@ async function home() {
     <small>${pr.hcp !== "" && pr.hcp != null ? `Handicap index ${esc(pr.hcp)}` : "Name, handicap index, home course and My Bag"}</small></div><span>›</span></div>
     ${age != null && age >= 14 ? `<div class="warn">Your index was last updated ${age} days ago. <a href="https://www.ghin.com/" target="_blank" rel="noopener">Look up on GHIN</a>, then update it in your profile.</div>` : ""}</div>`);
   $(".item", me).onclick = profilePage; b.appendChild(me);
+  const lastEx = daysSince(Store.get("lastExport", null));
+  if (Store.rounds().length && (lastEx == null || lastEx >= 30)) {
+    const bk = el(`<div class="warn">Back up your rounds: ${lastEx == null ? "you haven't exported yet" : `last backup ${lastEx} days ago`}. <button class="linkbtn" id="bk">Export my data</button></div>`);
+    $("#bk", bk).onclick = exportData; b.appendChild(bk);
+  }
   const pl = el(`<button class="btn">Plan a round</button>`); pl.onclick = planWizard; b.appendChild(pl);
   // courses grouped by club: club -> its courses -> (course page) tees. Search matches either name.
   b.appendChild(el(`<h2>Courses</h2>`));
@@ -248,7 +263,7 @@ async function home() {
 
 async function coursePage(slug) {
   const course = await loadCourse(slug); const m = meta(slug);
-  const b = screen(m.name, home, "");
+  const b = screen(m.name, home, "", { course: slug });
   const prefTee = A.settings.prefTees?.[slug];
   let tee = [prefTee, Store.get("lastTee:" + slug, null), course.teeOrder[0]].find(t => t && course.teeOrder.includes(t));
   const card = el(`<div class="card"><h3>${esc(m.course)}</h3><p>${esc(m.city)} · par ${course.par.reduce((a, c) => a + c, 0)}${m.elevationFt != null ? ` · ${m.elevationFt.toLocaleString()} ft elevation` : ""}</p>
@@ -342,6 +357,89 @@ function bagLearning() {
   });
   return out;
 }
+// ---------------------------------------------------------------- first-time setup: name, home course, tees, My Bag
+function setupWizard() {
+  const p = Store.profile(), d = { name: p.name, homeCourse: p.homeCourse || undefined, prefTees: { ...p.prefTees } };   // undefined = not chosen yet
+  let bag = Store.bag(); bag = bag.length ? JSON.parse(JSON.stringify(bag)) : Store.starterBag();
+  const steps = ["name", "course", "tees", "bag"];
+  const go = async i => {
+    const b = screen(`Welcome · step ${i + 1} of ${steps.length}`, i ? () => go(i - 1) : null, "");
+    const card = el(`<div class="card"></div>`); b.appendChild(card);
+    const next = el(`<button class="btn">${i === steps.length - 1 ? "Finish" : "Next"}</button>`);
+    const step = steps[i];
+    if (step === "name") {
+      card.innerHTML = `<h3>What's your name?</h3><label class="f">Name<input id="n" value="${esc(d.name)}" placeholder="e.g. Sam" autocomplete="name"></label>`;
+      const inp = $("#n", card); const ok = () => next.disabled = !inp.value.trim(); inp.oninput = ok; ok();
+      next.onclick = () => { d.name = inp.value.trim(); go(i + 1); };
+    } else if (step === "course") {
+      card.innerHTML = `<h3>Your home course</h3><p class="muted">Where you play most. You can change it later.</p><div class="list" id="l"></div>`;
+      const pick = slug => { d.homeCourse = slug; card.querySelectorAll("[data-s]").forEach(x => x.classList.toggle("hit", x.dataset.s === slug)); next.disabled = false; };
+      A.index.concat([{ slug: "", name: "None of these", course: "" }]).forEach(c => {
+        const it = el(`<div class="item" data-s="${c.slug}"><div class="grow"><b>${esc(c.name)}</b>${c.course ? `<small>${esc(c.course)} · ${esc(c.city)}</small>` : ""}</div></div>`);
+        it.onclick = () => pick(c.slug); $("#l", card).appendChild(it); });
+      next.disabled = d.homeCourse === undefined; if (d.homeCourse !== undefined) pick(d.homeCourse);
+      next.onclick = () => go(d.homeCourse ? i + 1 : i + 2);
+    } else if (step === "tees") {
+      if (!d.homeCourse) return go(i - 1);                 // "None of these": no home tees to pick
+      const course = await loadCourse(d.homeCourse), m = meta(d.homeCourse);
+      card.innerHTML = `<h3>Your usual tees at ${esc(m.name)}</h3><p class="muted">Plans and rounds start here. Other courses: set them later in your profile.</p><div class="chips" id="t"></div>`;
+      course.teeOrder.forEach(t => { const c = el(`<button class="chip${d.prefTees[d.homeCourse] === t ? " on" : ""}">${esc(t)} · ${course.tees[t].reduce((a, x) => a + x, 0).toLocaleString()} yd</button>`);
+        c.onclick = () => { d.prefTees[d.homeCourse] = t; card.querySelectorAll(".chip").forEach(x => x.classList.toggle("on", x === c)); next.disabled = false; };
+        $("#t", card).appendChild(c); });
+      next.disabled = !d.prefTees[d.homeCourse];
+      next.onclick = () => go(i + 1);
+    } else {
+      card.innerHTML = `<h3>My Bag</h3><p class="muted">For each club: <b>carry</b> (where it lands) and <b>total</b> (where it stops), in yards.
+        Example: 7 iron · carry 150 · total 158. Leave out clubs you don't carry; you can edit everything later.</p><div class="bag" id="rows"></div>
+        <button class="btn alt" id="add">Add a club</button><div id="msg"></div>`;
+      const num = v => v === "" ? null : Math.max(0, Math.round(+v));
+      const draw = () => { const rows = $("#rows", card); rows.innerHTML = "";
+        bag.forEach((c, k) => { const r = el(`<div class="bagrow"><div class="r1"><input data-f="name" value="${esc(c.name)}" aria-label="Club name"><button class="btn small alt" data-del>✕</button></div>
+          <div class="r2"><label>Carry<input data-f="carry" type="number" inputmode="numeric" placeholder="carry" value="${c.carry ?? ""}"></label>
+          <label>Total<input data-f="total" type="number" inputmode="numeric" placeholder="total" value="${c.total ?? ""}"></label>
+          <label class="chk"><input type="checkbox" data-f="tee" ${c.tee ? "checked" : ""}>Tee club</label></div></div>`);
+          r.querySelectorAll("[data-f]").forEach(x => x.onchange = () => { const f = x.dataset.f; c[f] = f === "name" ? x.value.trim() : f === "tee" ? x.checked : num(x.value); });
+          $("[data-del]", r).onclick = () => { bag.splice(k, 1); draw(); }; rows.appendChild(r); });
+        $("#add", card).disabled = bag.length >= 14; };
+      $("#add", card).onclick = () => { bag.push({ id: Store.id(), name: "", carry: null, total: null, tee: false, swings: {} }); draw(); };
+      draw();
+      next.onclick = () => {
+        const keep = bag.filter(c => c.name && c.carry);
+        if (!keep.length) { $("#msg", card).innerHTML = '<div class="warn">Enter a carry for at least one club.</div>'; return; }
+        Object.assign(p, d); Store.saveProfile(p); Store.saveBag(keep);
+        A.profile = Store.profile(); A.bag = Store.bag(); A.settings = Store.settings();
+        toast(`Welcome, ${p.name}!`); home();
+      };
+    }
+    b.appendChild(next);
+  };
+  go(0);
+}
+
+// ---------------------------------------------------------------- backups: export / import everything on this phone
+async function exportData() {
+  const file = Store.exportAll(), name = `driven-golf-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  const blob = new Blob([JSON.stringify(file, null, 1)], { type: "application/json" });
+  const f = new File([blob], name, { type: "application/json" });
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [f] })) await navigator.share({ files: [f], title: "Driven Golf backup" });   // text, email, AirDrop
+    else { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; a.click(); }
+    Store.set("lastExport", Date.now()); toast("Backup saved");
+  } catch (e) { if (e.name !== "AbortError") toast("Couldn't share the file: " + e.message); }
+}
+function importData() {
+  const inp = document.createElement("input"); inp.type = "file"; inp.accept = ".json,application/json";
+  inp.onchange = async () => {
+    let file; try { file = JSON.parse(await inp.files[0].text()); if (file.app !== "Driven Golf") throw 0; } catch { return toast("That isn't a Driven Golf backup file."); }
+    const n = k => Array.isArray(file.data[k]) ? file.data[k].length : 0;
+    const md = modal(`<h3 style="margin:0">Restore this backup?</h3><p>From ${new Date(file.exportedAt).toLocaleString()} (version ${esc(file.appVersion)}): ${n("rounds")} rounds, ${n("plans")} plans, profile and bag.</p>
+      <p class="warn">This replaces what's on this phone now. A copy of the current data is kept, just in case.</p><div class="row"><button class="btn alt" id="no">Cancel</button><button class="btn" id="yes">Restore</button></div>`);
+    $("#no", md).onclick = () => md.remove();
+    $("#yes", md).onclick = () => { try { Store.importAll(file); md.remove(); toast("Restored"); setTimeout(() => location.reload(), 600); } catch (e) { toast(e.message); } };
+  };
+  inp.click();
+}
+
 function profilePage() {
   const p = Store.profile(); let bag = JSON.parse(JSON.stringify(Store.bag()));
   const b = screen("Player Profile", home, "");
@@ -420,7 +518,12 @@ function profilePage() {
     A.profile = Store.profile(); A.bag = Store.bag(); A.settings = Store.settings();
     toast("Profile saved"); home();
   };
-  b.append(prof, bagCard, pt, save);
+  const last = daysSince(Store.get("lastExport", null));
+  const data = el(`<div class="card"><h3>Your data</h3><p class="muted" style="margin:0">Everything is saved on this phone only. Export a backup about once a month${last == null ? " (no backup yet)" : ` (last one ${last} day${last === 1 ? "" : "s"} ago)`}: it holds your rounds, plans, pins, profile and bag in one file you can text, email or AirDrop to yourself.</p>
+    <div class="row"><button class="btn alt" id="ex">Export my data</button><button class="btn alt" id="im">Import data</button></div>
+    <p class="muted" style="margin:0">Driven Golf ${APP_VERSION}</p></div>`);
+  $("#ex", data).onclick = exportData; $("#im", data).onclick = importData;
+  b.append(prof, bagCard, pt, save, data);
 }
 
 // ---------------------------------------------------------------- rounds & plans: create
@@ -588,6 +691,7 @@ async function holeView(ctx) {
   const prefs = Store.get("viewPrefs", { base: "map" });
   let view = "hole", tapMode = null, selectedHz = null, trace = null;
   const modeTitle = ctx.mode === "plan" ? "Plan" : ctx.mode === "round" ? "Round" : "Browse";
+  A.where = { screen: `${modeTitle} · hole view`, course: ctx.slug, hole: n };
 
   const s = el(`<div class="hole">
     <div class="bar"><button class="back" aria-label="Back">‹</button>
@@ -715,6 +819,7 @@ async function holeView(ctx) {
     });
     if (!hz) return clubPick(yd, k === "approach" ? "carry" : "total", teeOnly);
     let bag = A.bag.filter(c => c.carry > 0); if (teeOnly && bag.some(c => c.tee)) bag = bag.filter(c => c.tee);
+    if (!bag.length) return null;                            // no bag numbers yet
     bag = bag.slice().sort((a, b) => b.carry - a.carry);
     const need = Math.round(plays(ctx.slug, hz.carry) + 5), name = panelName(hz.f).toLowerCase();
     const info = { name, need, edge: Math.round(hz.carry), front: Math.round(hz.reach), longest: bag[0] };
@@ -1083,7 +1188,7 @@ async function holeView(ctx) {
         <button class="btn small alt" id="sm">−</button><button class="btn small alt" id="sp">+</button></div>
         <div class="row"><button class="btn alt" id="pv">‹ Hole ${n > 1 ? n - 1 : NH}</button>${n < NH ? `<button class="btn" id="nx">Hole ${n + 1} ›</button>` : `<button class="btn" id="sum">Finish round</button>`}</div>`;
     }
-    sh.innerHTML = html;
+    sh.innerHTML = html + `<div class="fbrow">${feedbackLink()}</div>`;
     const on = (id, f) => { const x = $("#" + id, sh); if (x) x.onclick = f; };
     on("movePin", () => setTap(tapMode === "pin" ? null : "pin"));
     on("hzToggle", () => { hzOpen = !hzOpen; prefs.hzOpen = hzOpen; Store.set("viewPrefs", prefs); renderSheet(); });
@@ -1238,4 +1343,22 @@ function teeLogPage() {
   return Promise.resolve();
 }
 
-(location.hash === "#teelog" ? teeLogPage() : home()).catch(e => { app.innerHTML = `<div class="body"><div class="card"><h3>Couldn't load course data</h3><p>${esc(e.message)}</p></div></div>`; });
+// ---------------------------------------------------------------- start-up: safe data update, beta note, first-time setup
+function betaNote() {
+  return new Promise(res => {
+    const md = modal(`<h3 style="margin:0">Driven Golf beta</h3><p>Distances are estimates from public maps. Your data stays on your phone. Please send feedback.</p>
+      <p class="muted" style="margin:0">Version ${APP_VERSION} · the Feedback link is at the top of every screen.</p><button class="btn" id="ok">Got it</button>`);
+    $("#ok", md).onclick = () => { Store.set("betaSeen", true); md.remove(); res(); };
+  });
+}
+async function boot() {
+  Store.migrate();
+  A.profile = Store.profile(); A.bag = Store.bag(); A.settings = Store.settings();
+  if (location.hash === "#teelog") return teeLogPage();
+  if (!A.index.length) await loadIndex();
+  if (!Store.get("betaSeen", false)) await betaNote();
+  if (!A.profile.name) return setupWizard();
+  return home();
+}
+
+boot().catch(e => { app.innerHTML = `<div class="body"><div class="card"><h3>Couldn't load course data</h3><p>${esc(e.message)}</p></div></div>`; });

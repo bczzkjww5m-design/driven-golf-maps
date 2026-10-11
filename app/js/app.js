@@ -4,7 +4,7 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": 
 const el = html => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstElementChild; };
 function toast(msg, ms = 2200) { const t = el(`<div class="toast">${esc(msg)}</div>`); document.body.appendChild(t); setTimeout(() => t.remove(), ms); }
 const app = $("#app");
-const A = { index: [], courses: {}, settings: Store.settings(), gps: null, gpsWatch: null };
+const A = { index: [], courses: {}, settings: Store.settings(), bag: Store.bag(), profile: Store.profile(), gps: null, gpsWatch: null };
 
 // ---------------------------------------------------------------- data
 async function loadIndex() { A.index = await (await fetch("data/index.json")).json(); }
@@ -73,11 +73,31 @@ function playLine(h, from, pin, targets = []) {
   });
   return [...pts, pinP];
 }
-function clubFor(yards) {
-  const bag = A.settings.bag; if (!yards) return null;
-  let best = bag[0][0], bd = Infinity;
-  bag.forEach(([c, d]) => { const x = Math.abs(d - yards); if (x < bd) { bd = x; best = c; } });
-  return best;
+// ---- club picks from My Bag: total yards for tee shots and fairway layups, carry yards for approaches and any shot over
+// a hazard. Returns the club plus the next club up and down, a note when the yardage falls between two clubs, and a
+// warning when no club reaches. Yardages here are already plays-like where that applies.
+const clubVal = (c, use) => use === "total" ? (c.total || c.carry) : c.carry;
+function clubPick(yards, use = "carry", teeOnly = false) {
+  if (!yards) return null;
+  let bag = A.bag.filter(c => c.carry > 0);
+  if (teeOnly && bag.some(c => c.tee)) bag = bag.filter(c => c.tee);
+  if (!bag.length) return null;
+  bag = bag.slice().sort((a, b) => clubVal(b, use) - clubVal(a, use));          // longest first
+  const v = x => clubVal(x, use), noReach = yards > v(bag[0]) + 3;
+  const reach = bag.map((x, k) => k).filter(k => v(bag[k]) >= yards - 3);       // clubs that get there (3 yd slack)
+  const i = noReach ? 0 : reach.length ? reach.at(-1) : bag.length - 1;          // the shortest one that does
+  const c = bag[i], lower = bag[i + 1];
+  const between = !noReach && v(c) - yards > 3 && lower && v(lower) < yards ? [lower, c] : null;
+  return { club: c, name: c.name, use, yards: Math.round(yards), up: bag[i - 1] || null, down: bag[i + 1] || null, between, noReach, longest: bag[0] };
+}
+const clubFor = (yards, use = "carry", teeOnly = false) => clubPick(yards, use, teeOnly)?.name || null;
+// "7i · 165 carry / 172 total"
+const clubLine = c => `${c.name} · ${c.carry} carry${c.total ? ` / ${c.total} total` : ""}`;
+function pickNote(pk) {
+  if (!pk) return "";
+  if (pk.noReach) return `No club reaches ${pk.yards}: your longest is ${clubLine(pk.longest)}.`;
+  if (pk.between) return `${pk.yards} is between ${pk.between[0].name} (${clubVal(pk.between[0], pk.use)}) and ${pk.between[1].name} (${clubVal(pk.between[1], pk.use)}).`;
+  return "";
 }
 const playsLikeOn = slug => { const e = meta(slug).elevationFt; return e != null && Math.abs(e - A.settings.homeElevationFt) >= 1000; };
 const plays = (slug, yd) => playsLikeOn(slug) ? Geo.playsLike(yd, meta(slug).elevationFt, A.settings.homeElevationFt) : yd;
@@ -110,7 +130,7 @@ const panelName = f => { const p = f.properties;
   return p.kind === "avoid" ? (p.name || "Avoid zone") : p.kind === "water" ? (p.sub === "lateral" ? "Lateral water" : "Water")
     : p.kind === "bunker" ? (p.sub === "greenside" ? "Greenside bunker" : "Fairway bunker") : "OB"; };
 function hazardPanel(course, n, line) {
-  const from = line[0], reach = Math.max(...A.settings.bag.map(b => b[1])) + 20, rows = [];   // in plays-like yards (altitude)
+  const from = line[0], reach = Math.max(...A.bag.map(c => c.total || c.carry)) + 20, rows = [];   // in plays-like yards (altitude)
   hazards(course, n).filter(f => PANEL_KINDS.includes(f.properties.kind)).forEach(f => {
     const g = f.geometry, poly = g.type.includes("Polygon");
     const near = Geo.linesOf(g).flatMap(r => densify(r)).map(p => ({ p, sd: lineSide(line, p), d: Geo.yd(from, p) }))
@@ -173,14 +193,39 @@ function screen(title, back, body) {
 async function home() {
   if (!A.index.length) await loadIndex();
   const b = screen("Driven Golf", null, "");
-  const pr = el(`<button class="btn">Plan a round</button>`); pr.onclick = planWizard; b.appendChild(pr);
+  // me: name and handicap index (typed in from GHIN), with a nudge to refresh it after about two weeks
+  const pr = A.profile, age = daysSince(pr.hcpDate);
+  const me = el(`<div class="card me"><div class="item" style="padding:0"><div class="grow"><b>${pr.name ? esc(pr.name) : "Set up your Player Profile"}</b>
+    <small>${pr.hcp !== "" && pr.hcp != null ? `Handicap index ${esc(pr.hcp)}` : "Name, handicap index, home course and My Bag"}</small></div><span>›</span></div>
+    ${age != null && age >= 14 ? `<div class="warn">Your index was last updated ${age} days ago. <a href="https://www.ghin.com/" target="_blank" rel="noopener">Look up on GHIN</a>, then update it in your profile.</div>` : ""}</div>`);
+  $(".item", me).onclick = profilePage; b.appendChild(me);
+  const pl = el(`<button class="btn">Plan a round</button>`); pl.onclick = planWizard; b.appendChild(pl);
+  // courses grouped by club: club -> its courses -> (course page) tees. Search matches either name.
   b.appendChild(el(`<h2>Courses</h2>`));
+  const search = el(`<input type="search" placeholder="Search clubs or courses" aria-label="Search clubs or courses">`);
   const list = el(`<div class="card list"></div>`);
-  A.index.forEach(c => {
-    const it = el(`<div class="item"><div class="grow"><b>${esc(c.name)}</b><small>${esc(c.course)} · ${esc(c.city)}</small></div><span>›</span></div>`);
-    it.onclick = () => coursePage(c.slug); list.appendChild(it);
-  });
-  b.appendChild(list);
+  b.append(search, list);
+  const clubsOf = () => [...new Set(A.index.map(c => c.name))].map(name => ({ name, courses: A.index.filter(c => c.name === name) }));
+  const open = new Set();
+  function drawCourses() {
+    const q = search.value.trim().toLowerCase(); list.innerHTML = "";
+    let shown = 0;
+    clubsOf().forEach(club => {
+      const clubHit = q && club.name.toLowerCase().includes(q), hits = club.courses.filter(c => q && c.course.toLowerCase().includes(q));
+      if (q && !clubHit && !hits.length) return;
+      shown++;
+      const one = club.courses.length === 1, c0 = club.courses[0];
+      const it = el(`<div class="item"><div class="grow"><b>${esc(club.name)}</b><small>${esc(c0.city)} · ${one ? esc(c0.course) : `${club.courses.length} courses`}</small></div><span>${one ? "›" : open.has(club.name) || hits.length ? "▾" : "▸"}</span></div>`);
+      it.onclick = () => { if (one) return coursePage(c0.slug); open.has(club.name) ? open.delete(club.name) : open.add(club.name); drawCourses(); };
+      list.appendChild(it);
+      if (!one && (open.has(club.name) || hits.length)) club.courses.forEach(c => {
+        const sub = el(`<div class="item sub${hits.includes(c) ? " hit" : ""}"><div class="grow"><b>${esc(c.course)}</b></div><span>›</span></div>`);
+        sub.onclick = () => coursePage(c.slug); list.appendChild(sub);
+      });
+    });
+    if (!shown) list.appendChild(el(`<p class="muted">No club or course matches “${esc(search.value)}”.</p>`));
+  }
+  search.oninput = drawCourses; drawCourses();
   const groups = ["All", ...new Set(A.index.map(c => c.group))];
   let gsel = Store.get("roundFilter", "All"); if (!groups.includes(gsel)) gsel = "All";
   const rounds = Store.rounds().sort((a, b) => b.date - a.date).filter(r => gsel === "All" || meta(r.course).group === gsel);
@@ -196,7 +241,7 @@ async function home() {
     it.onclick = () => roundSummary(r.id); rl.appendChild(it);
   });
   b.appendChild(rl);
-  const st = el(`<button class="btn alt">Settings: home elevation, club distances, preferred tees</button>`); st.onclick = settingsPage; b.appendChild(st);
+  const st = el(`<button class="btn alt">Player Profile and My Bag</button>`); st.onclick = profilePage; b.appendChild(st);
 }
 
 async function coursePage(slug) {
@@ -252,34 +297,115 @@ function planWizard() {
   });
 }
 
-function settingsPage() {
-  const s = A.settings;
-  const b = screen("Settings", home, "");
-  const c = el(`<div class="card"><h3>Home course elevation</h3><p>Used for "plays like" yardages on high-altitude courses (about 2% more carry per 1,000 ft). Twin Cities is about 900 ft.</p>
-    <label class="f">Elevation (feet)<input id="elev" type="number" inputmode="numeric" value="${s.homeElevationFt}"></label></div>`);
-  const bag = el(`<div class="card"><h3>Club distances (carry, yards)</h3><p>Used to suggest clubs in a round plan.</p><div id="bag" class="list"></div></div>`);
-  s.bag.forEach(([club, d], i) => {
-    const r = el(`<div class="item" style="cursor:default"><div class="grow">${esc(club)}</div><input type="number" inputmode="numeric" style="width:90px" id="bag${i}" value="${d}"></div>`);
-    $("#bag", bag).appendChild(r);
+// ---------------------------------------------------------------- Player Profile (with My Bag)
+const isWedge = name => /wedge|^(pw|gw|aw|sw|lw)$|\d\d\s*°/i.test(name.trim());
+const daysSince = t => t ? Math.floor((Date.now() - t) / 86400000) : null;
+// only speak up when something looks off, one plain sentence each
+function bagWarnings(bag) {
+  const out = [], b = bag.filter(c => c.carry > 0).slice().sort((x, y) => y.carry - x.carry);
+  b.forEach((c, i) => {
+    const nx = b[i + 1];
+    if (nx && c.carry - nx.carry > 20) out.push(`Big gap: ${c.name} to ${nx.name} is ${c.carry - nx.carry} yards.`);
+    if (nx && c.carry - nx.carry < 5) out.push(`Your ${c.name} and ${nx.name} go about the same distance.`);
+    if (c.total && c.total < c.carry) out.push(`Your ${c.name} total (${c.total}) is shorter than its carry (${c.carry}).`);
   });
-  const save = el(`<button class="btn">Save settings</button>`);
-  save.onclick = () => {
-    s.homeElevationFt = +$("#elev", c).value || 0;
-    s.bag = s.bag.map(([club], i) => [club, +$("#bag" + i, bag).value || 0]);
-    Store.saveSettings(s); A.settings = Store.settings(); toast("Settings saved"); home();
-  };
-  // preferred tees per course: the default when planning or starting a round
-  const pt = el(`<div class="card"><h3>Preferred tees</h3><p>The tees you usually play. Plans and rounds start here.</p><div id="pt" class="list"></div></div>`);
-  s.prefTees = s.prefTees || {};
+  if (bag.length > 14) out.push(`That's ${bag.length} clubs; the rules allow 14.`);
+  return out;
+}
+// learning: where my logged shots finished vs my bag numbers. A logged shot ends where the ball stopped, so it's
+// compared with total (carry if no total yet). Full swings only (at least 75% of the bag number), 5+ shots.
+function bagLearning() {
+  const by = {};
+  Store.rounds().forEach(r => Object.values(r.holes).forEach(hh => {
+    const sh = hh.shots || [];
+    for (let i = 0; i < sh.length - 1; i++) { const c = sh[i].club; if (!c || c === "Putter") continue; (by[c] = by[c] || []).push(Geo.yd(sh[i].p, sh[i + 1].p)); }
+  }));
+  const dismissed = Store.get("bagDismiss", {});
+  return A.bag.map(c => {
+    const now = c.total || c.carry, ds = (by[c.name] || []).filter(d => d >= 0.75 * now).sort((a, b) => a - b);
+    if (ds.length < 5) return null;
+    const med = Math.round(ds[Math.floor(ds.length / 2)]);
+    if (Math.abs(med - now) < 5 || dismissed[c.name] === med) return null;
+    return { c, med, n: ds.length };
+  }).filter(Boolean);
+}
+function profilePage() {
+  const p = Store.profile(); let bag = JSON.parse(JSON.stringify(Store.bag()));
+  const b = screen("Player Profile", home, "");
+  const age = daysSince(p.hcpDate);
+  const prof = el(`<div class="card"><h3>You</h3>
+    <label class="f">Name<input id="pn" value="${esc(p.name)}" autocomplete="name"></label>
+    <label class="f">Home course<select id="phc"><option value="">—</option>${A.index.map(c => `<option value="${c.slug}" ${c.slug === p.homeCourse ? "selected" : ""}>${esc(c.name)} · ${esc(c.course)}</option>`).join("")}</select></label>
+    <label class="f">Home elevation (feet)<input id="pel" type="number" inputmode="numeric" value="${p.homeElevationFt}"></label>
+    <p class="muted" style="margin:0">Used for "plays like" yardages on high-altitude courses (about 2% more carry per 1,000 ft). Twin Cities is about 900 ft.</p>
+    <div class="muted">Plays</div><div class="chips" id="phand">${[["R", "Right-handed"], ["L", "Left-handed"]].map(([v, l]) => `<button class="chip${p.hand === v ? " on" : ""}" data-hand="${v}">${l}</button>`).join("")}</div>
+    <label class="f">GHIN number<input id="pgh" inputmode="numeric" value="${esc(p.ghin)}"></label>
+    <label class="f">Handicap index<input id="phi" inputmode="decimal" value="${esc(p.hcp)}" placeholder="e.g. 12.4"></label>
+    <div class="muted">${p.hcpDate ? `Index last updated ${new Date(p.hcpDate).toLocaleDateString()}${age >= 14 ? ` · <b>${age} days ago: time to refresh it</b>` : ""}` : "Type your index from GHIN; the date is saved when you change it."}
+      · <a href="https://www.ghin.com/" target="_blank" rel="noopener">Look up on GHIN</a></div></div>`);
+  prof.querySelectorAll("[data-hand]").forEach(x => x.onclick = () => { p.hand = x.dataset.hand; prof.querySelectorAll("[data-hand]").forEach(y => y.classList.toggle("on", y === x)); });
+  // preferred tees per course
+  const pt = el(`<div class="card"><h3>Preferred tees</h3><p class="muted" style="margin:0">Plans and rounds start on these.</p><div id="pt" class="list"></div></div>`);
   A.index.forEach(async m => {
     const course = await loadCourse(m.slug);
     const r = el(`<div class="item" style="cursor:default;flex-wrap:wrap"><div class="grow"><b>${esc(m.name)}</b><small>${esc(m.course)}</small></div><div class="chips"></div></div>`);
     const draw = () => { const box = $(".chips", r); box.innerHTML = "";
-      course.teeOrder.forEach(t => { const ch = el(`<button class="chip${s.prefTees[m.slug] === t ? " on" : ""}">${esc(t)}</button>`);
-        ch.onclick = () => { s.prefTees[m.slug] = t; draw(); }; box.appendChild(ch); }); };
+      course.teeOrder.forEach(t => { const ch = el(`<button class="chip${p.prefTees[m.slug] === t ? " on" : ""}">${esc(t)}</button>`);
+        ch.onclick = () => { p.prefTees[m.slug] = t; draw(); }; box.appendChild(ch); }); };
     draw(); $("#pt", pt).appendChild(r);
   });
-  b.append(c, bag, pt, save);
+  // My Bag
+  const bagCard = el(`<div class="card"><h3>My Bag</h3><p class="muted" style="margin:0">Carry = where the ball lands; total = where it stops (rollout = total − carry). Tee shots and layups use total; approaches and shots over a hazard use carry.</p>
+    <div id="warn"></div><div id="learn"></div><div id="rows" class="bag"></div><button class="btn alt" id="add">Add a club</button></div>`);
+  const num = v => v === "" || v == null ? null : Math.max(0, Math.round(+v));
+  function drawBag() {
+    const rows = $("#rows", bagCard); rows.innerHTML = "";
+    bag.forEach((c, i) => {
+      const roll = c.total && c.carry ? c.total - c.carry : null, sw = c.swings || {};
+      const r = el(`<div class="bagrow">
+        <div class="r1"><input data-f="name" value="${esc(c.name)}" aria-label="Club name"><button class="btn small alt" data-mv="-1" ${i ? "" : "disabled"}>↑</button><button class="btn small alt" data-mv="1" ${i < bag.length - 1 ? "" : "disabled"}>↓</button><button class="btn small alt" data-del>✕</button></div>
+        <div class="r2"><label>Carry<input data-f="carry" type="number" inputmode="numeric" value="${c.carry ?? ""}"></label><label>Total<input data-f="total" type="number" inputmode="numeric" value="${c.total ?? ""}" placeholder="—"></label>
+          <span class="roll">${roll != null ? `rollout ${roll}` : "rollout —"}</span><label class="chk"><input type="checkbox" data-f="tee" ${c.tee ? "checked" : ""}>Tee club</label></div>
+        ${isWedge(c.name) ? `<details ${sw.half || sw.threeq ? "open" : ""}><summary>Partial swings (optional)</summary>
+          ${[["half", "½"], ["threeq", "¾"]].map(([k, l]) => `<div class="r2"><span class="sl">${l} swing</span><label>Carry<input data-sw="${k}.carry" type="number" inputmode="numeric" value="${sw[k]?.carry ?? ""}"></label><label>Total<input data-sw="${k}.total" type="number" inputmode="numeric" value="${sw[k]?.total ?? ""}"></label></div>`).join("")}
+          <div class="muted" style="font-size:12px">Full swing uses the carry and total above.</div></details>` : ""}</div>`);
+      r.querySelectorAll("[data-f]").forEach(x => x.onchange = () => {
+        const f = x.dataset.f; c[f] = f === "name" ? x.value.trim() : f === "tee" ? x.checked : num(x.value); drawBag(); });
+      r.querySelectorAll("[data-sw]").forEach(x => x.onchange = () => { const [k, f] = x.dataset.sw.split("."); c.swings = c.swings || {}; c.swings[k] = c.swings[k] || {}; c.swings[k][f] = num(x.value); drawBag(); });
+      r.querySelectorAll("[data-mv]").forEach(x => x.onclick = () => { const j = i + +x.dataset.mv; [bag[i], bag[j]] = [bag[j], bag[i]]; drawBag(); });
+      $("[data-del]", r).onclick = () => { bag.splice(i, 1); drawBag(); };
+      rows.appendChild(r);
+    });
+    $("#add", bagCard).disabled = bag.length >= 14;
+    $("#add", bagCard).textContent = bag.length >= 14 ? "14 clubs: the most the rules allow" : "Add a club";
+    const w = bagWarnings(bag);
+    $("#warn", bagCard).innerHTML = w.map(t => `<div class="warn">${esc(t)}</div>`).join("");
+  }
+  $("#add", bagCard).onclick = () => { bag.push({ id: Store.id(), name: "New club", carry: null, total: null, tee: false, swings: {} }); drawBag(); };
+  function drawLearn() {
+    const box = $("#learn", bagCard); box.innerHTML = "";
+    bagLearning().forEach(sg => {
+      const it = el(`<div class="learn">Your ${esc(sg.c.name)} finishes about <b>${sg.med}</b> yards over ${sg.n} logged shots (where the ball stopped, so that's total).
+        Update its total from ${sg.c.total ?? "—"} to ${sg.med}? <div class="row"><button class="btn small">Update</button><button class="btn small alt">Not now</button></div></div>`);
+      const [yes, no] = it.querySelectorAll("button");
+      yes.onclick = () => { const c = bag.find(x => x.name === sg.c.name); if (c) c.total = sg.med; drawBag(); it.remove(); toast("Updated. Save your profile to keep it."); };
+      no.onclick = () => { const d = Store.get("bagDismiss", {}); d[sg.c.name] = sg.med; Store.set("bagDismiss", d); it.remove(); };
+      box.appendChild(it);
+    });
+  }
+  drawBag(); drawLearn();
+  const save = el(`<button class="btn">Save profile</button>`);
+  save.onclick = () => {
+    const hcp = $("#phi", prof).value.trim();
+    if (hcp !== String(p.hcp ?? "")) p.hcpDate = hcp ? Date.now() : null;
+    Object.assign(p, { name: $("#pn", prof).value.trim(), homeCourse: $("#phc", prof).value, homeElevationFt: +$("#pel", prof).value || 0,
+      ghin: $("#pgh", prof).value.trim(), hcp });
+    bag = bag.filter(c => c.name);
+    Store.saveProfile(p); Store.saveBag(bag);
+    A.profile = Store.profile(); A.bag = Store.bag(); A.settings = Store.settings();
+    toast("Profile saved"); home();
+  };
+  b.append(prof, bagCard, pt, save);
 }
 
 // ---------------------------------------------------------------- rounds & plans: create
@@ -522,7 +648,7 @@ async function holeView(ctx) {
     if (tapMode === "pin") { setPin(onGreen(p)); drawAll(); return; }
     if (["teeTarget", "layup", "approach"].includes(tapMode)) {
       const k = tapMode; const from = planOrigin(k); const yd = Geo.yd(from, p);
-      ph[k] = { p, club: ph[k]?.clubSet ? ph[k].club : clubFor(plays(ctx.slug, yd)), clubSet: ph[k]?.clubSet };
+      ph[k] = { p, club: ph[k]?.clubSet ? ph[k].club : pickFor(k, from, p)?.name || null, clubSet: ph[k]?.clubSet };
       if (!ph.score) ph.score = h.par;
       if (k === "approach" && !ph.dangerSet) ph.danger = suggestDanger();
       persist(); setTap(null); drawAll(); return;
@@ -560,6 +686,23 @@ async function holeView(ctx) {
   // ---- plan helpers
   const planKeys = h.par === 3 ? ["approach"] : h.par === 5 ? ["teeTarget", "layup", "approach"] : ["teeTarget", "approach"];
   const KEYNAME = { teeTarget: "Tee shot", layup: "Layup", approach: h.par === 3 ? (m.teeShots === "shortgame" ? "Tee shot (short game)" : "Tee shot (approach)") : "Approach" };
+  // club for a planned shot: total yards for the tee shot (tee clubs on par 4/5) and layups; carry for approaches and
+  // whenever the line has to carry a red hazard or avoid zone. Plays-like yards on altitude courses.
+  function pickFor(k, from, p) {
+    const yd = plays(ctx.slug, Geo.yd(from, p));
+    const overHz = targetWarnings(course, n, from, p).some(w => w.msg.startsWith("line carries"));
+    return clubPick(yd, k === "approach" || overHz ? "carry" : "total", k === "teeTarget" && h.par > 3);
+  }
+  function clubPickHTML(k, from, t) {
+    const pk = pickFor(k, from, t.p), cur = A.bag.find(c => c.name === t.club) || pk?.club;
+    if (!cur) return "";
+    const order = A.bag.slice().sort((a, b) => b.carry - a.carry), i = order.findIndex(c => c.name === cur.name);
+    const up = order[i - 1], dn = order[i + 1], note = pickNote(pk);
+    return `<div class="clubpick"><button class="btn small alt" ${up ? `data-pickclub="${k}|${esc(up.name)}"` : "disabled"}>▲ ${up ? esc(up.name) : ""}</button>
+      <b>${esc(clubLine(cur))}</b><button class="btn small alt" ${dn ? `data-pickclub="${k}|${esc(dn.name)}"` : "disabled"}>▼ ${dn ? esc(dn.name) : ""}</button></div>
+      <div class="muted" style="font-size:12px">Picked by ${pk?.use === "total" ? "total" : "carry"} yards${t.clubSet ? ` · you chose ${esc(t.club)} <button class="linkbtn" data-autoclub="${k}">use the suggestion (${esc(pk?.name || "")})</button>` : ""}</div>
+      ${note ? `<div class="warn">${esc(note)}</div>` : ""}`;
+  }
   function planOrigin(k) {
     const i = planKeys.indexOf(k);
     for (let j = i - 1; j >= 0; j--) if (ph?.[planKeys[j]]?.p) return ph[planKeys[j]].p;
@@ -765,7 +908,7 @@ async function holeView(ctx) {
     if (planned.length) {
       L.polyline([teeToday(), ...planned, pin], { pane: "lines", color: "#ffd27a", weight: 2, dashArray: "6 7", interactive: false }).addTo(top);
       planKeys.forEach(k => { if (!P[k]?.p) return; L.marker(P[k].p, { icon: tgtIcon(k === "teeTarget" ? "T" : k === "layup" ? "L" : "A", true), draggable: ctx.mode === "plan", zIndexOffset: 600 }).addTo(top)
-        .on("dragend", e => { if (ctx.mode !== "plan") return; const ll = e.target.getLatLng(); ph[k].p = [ll.lat, ll.lng]; if (!ph[k].clubSet) ph[k].club = clubFor(plays(ctx.slug, Geo.yd(planOrigin(k), ph[k].p))); persist(); drawAll(false); }); });
+        .on("dragend", e => { if (ctx.mode !== "plan") return; const ll = e.target.getLatLng(); ph[k].p = [ll.lat, ll.lng]; if (!ph[k].clubSet) ph[k].club = pickFor(k, planOrigin(k), ph[k].p)?.name || null; persist(); drawAll(false); }); });
     } else if (ctx.mode !== "round") {
       L.polyline(playLine(h, teeP, getPin()), { pane: "lines", color: "#fff", weight: 1.6, dashArray: "5 7", opacity: .85, interactive: false }).addTo(top);
     }
@@ -849,7 +992,7 @@ async function holeView(ctx) {
         html += `<div class="card" style="padding:10px;gap:6px"><div style="display:flex;gap:8px;align-items:center"><b style="flex:1">${KEYNAME[k]}</b>
           ${yd != null ? `<span class="num">${yd} yd${playsTxt(ctx.slug, yd)}</span>` : '<span class="muted">not set</span>'}
           <button class="btn small${tapMode === k ? "" : " alt"}" data-set="${k}">${t?.p ? "Move" : "Set"}</button></div>
-          ${t?.p ? `<select data-club="${k}">${A.settings.bag.map(([c, d]) => `<option ${c === t.club ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>` : ""}
+          ${t?.p ? clubPickHTML(k, from, t) : ""}
           ${warns.map(w => `<div class="warn${w.red ? " red" : ""}">Heads up: ${esc(w.msg)}. You can keep this target.</div>`).join("")}</div>`;
       });
       html += hzHTML;
@@ -874,10 +1017,10 @@ async function holeView(ctx) {
       if (P && onTee && planKeys.some(k => P[k]?.p)) {
         let prev = from;
         const rows = planKeys.filter(k => P[k]?.p).map((k, i) => {
-          const d = Math.round(Geo.yd(prev, P[k].p)); prev = P[k].p;
-          let club = P[k].club || clubFor(plays(ctx.slug, d)), note = "";
+          const prevPt = prev, d = Math.round(Geo.yd(prev, P[k].p)); prev = P[k].p;
+          let club = P[k].club || pickFor(k, prevPt, P[k].p)?.name, note = "";
           if (i === 0 && gpsTee) {
-            const was = clubFor(plays(ctx.slug, Geo.yd(teeP, P[k].p))), now = clubFor(plays(ctx.slug, d));
+            const was = pickFor(k, teeP, P[k].p)?.name, now = pickFor(k, from, P[k].p)?.name;
             if (now && was !== now && now !== club) { const ch = card - playsToday(); note = `Tees ${ch >= 0 ? "up" : "back"} ${Math.abs(ch)} yards: ${club} → ${now}`; repick = { from: club, to: now }; club = now; }
           }
           return `<div class="planrow"><span>${KEYNAME[k]}</span><b class="num">${d} yd</b><span class="club">${esc(club || "")}</span></div>${note ? `<div class="warn">${esc(note)}</div>` : ""}`;
@@ -909,7 +1052,8 @@ async function holeView(ctx) {
     on("sum", () => ctx.mode === "plan" ? planSummary(plan.id) : roundSummary(round.id));
     if (ctx.mode === "plan") {
       sh.querySelectorAll("[data-set]").forEach(b => b.onclick = () => setTap(tapMode === b.dataset.set ? null : b.dataset.set));
-      sh.querySelectorAll("[data-club]").forEach(x => x.onchange = () => { ph[x.dataset.club].club = x.value; ph[x.dataset.club].clubSet = true; persist(); });
+      sh.querySelectorAll("[data-pickclub]").forEach(x => x.onclick = () => { const [k, c] = x.dataset.pickclub.split("|"); ph[k].club = c; ph[k].clubSet = true; persist(); renderSheet(); });
+      sh.querySelectorAll("[data-autoclub]").forEach(x => x.onclick = () => { const k = x.dataset.autoclub; ph[k].clubSet = false; ph[k].club = pickFor(k, planOrigin(k), ph[k].p)?.name || null; persist(); renderSheet(); });
       sh.querySelectorAll("[data-danger]").forEach(x => x.onclick = () => { ph.danger = ph.danger === x.dataset.danger ? null : x.dataset.danger; ph.dangerSet = true; persist(); renderSheet(); });
       on("sm", () => { ph.score = Math.max(1, (ph.score || h.par) - 1); persist(); renderSheet(); });
       on("sp", () => { ph.score = (ph.score || h.par) + 1; persist(); renderSheet(); });
@@ -972,7 +1116,7 @@ async function planSummary(id) {
     course.teeOrder.filter(t => t !== p.tees).forEach(t => { const c = el(`<button class="chip">${esc(t)}</button>`); c.onclick = () => {
       const np = JSON.parse(JSON.stringify(p)); np.id = Store.id(); np.created = Date.now(); np.tees = t; np.copiedFromTees = p.tees; np.name = `${p.name} → ${t}`; np.changed = [];
       course.holes.forEach(h => { const ph = np.holes[h.n]; if (!ph) return; delete ph.tee; const ks = keys(h.par); const k0 = ks[0];
-        if (ph[k0]?.p) { const yd = Geo.yd(teePoint(course, h.n, t), ph[k0].p); const nc = clubFor(plays(p.course, yd)); if (nc !== ph[k0].club) { np.changed.push(h.n); ph[k0].club = nc; ph[k0].clubSet = false; } } });
+        if (ph[k0]?.p) { const yd = Geo.yd(teePoint(course, h.n, t), ph[k0].p); const nc = clubFor(plays(p.course, yd), h.par > 3 ? "total" : "carry", h.par > 3); if (nc !== ph[k0].club) { np.changed.push(h.n); ph[k0].club = nc; ph[k0].clubSet = false; } } });
       Store.savePlan(np); md.remove(); planSummary(np.id); }; $("#tc", md).appendChild(c); });
   };
   $("#del", card).onclick = () => { const md = modal(`<h3 style="margin:0">Delete this plan?</h3><div class="row"><button class="btn alt" id="n">Keep it</button><button class="btn red" id="y">Delete</button></div>`);

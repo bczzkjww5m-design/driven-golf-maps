@@ -4,15 +4,27 @@ const Store = {
   set(k, v) { try { localStorage.setItem("dg:" + k, JSON.stringify(v)); return true; } catch { return false; } },
   id() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); },
 
-  settings() {
-    return Object.assign({
-      homeElevationFt: 900,           // Twin Cities
-      prefTees: {},                   // preferred tee set per course: {slug: tee name}
-      bag: [["Driver", 230], ["3 wood", 210], ["5 wood", 195], ["4 hybrid", 185], ["5 iron", 172], ["6 iron", 162],
-            ["7 iron", 151], ["8 iron", 140], ["9 iron", 129], ["PW", 117], ["GW", 104], ["SW", 90], ["LW", 72]],
-    }, Store.get("settings", {}));
+  // Player Profile (replaces the old Settings). Older phones: values move over from "settings" the first time.
+  profile() {
+    const old = Store.get("settings", {});
+    return Object.assign({ name: "", homeCourse: "", homeElevationFt: old.homeElevationFt ?? 900, prefTees: old.prefTees || {},
+      hand: "R", ghin: "", hcp: "", hcpDate: null }, Store.get("profile", {}));
   },
-  saveSettings(s) { Store.set("settings", s); },
+  saveProfile(p) { Store.set("profile", p); },
+  // My Bag: up to 14 clubs, longest first. carry / total in yards (total null = not entered yet -> carry is used);
+  // tee = a club I'd hit off the tee; swings = optional wedge partials {half:{carry,total}, threeq:{carry,total}}
+  bag() {
+    const b = Store.get("bag", null); if (b) return b;
+    const old = (Store.get("settings", {}).bag) || [["Driver", 230], ["3 wood", 210], ["5 wood", 195], ["4 hybrid", 185], ["5 iron", 172], ["6 iron", 162],
+      ["7 iron", 151], ["8 iron", 140], ["9 iron", 129], ["PW", 117], ["GW", 104], ["SW", 90], ["LW", 72]];
+    return old.map(([name, d], i) => ({ id: "c" + i, name, carry: d, total: null, tee: /driver|wood|hybrid/i.test(name), swings: {} }));
+  },
+  saveBag(b) { Store.set("bag", b); },
+  // what the rest of the app reads: home elevation, preferred tees, and [club, carry] pairs
+  settings() {
+    const p = Store.profile();
+    return { homeElevationFt: p.homeElevationFt, prefTees: p.prefTees, bag: Store.bag().map(c => [c.name, c.carry]) };
+  },
 
   // rounds: {id, course, tees, date, planId, holes: {n: {tee, pin, shots:[{p,club,src,penalty}], putts, score}}}
   rounds() { return Store.get("rounds", []); },

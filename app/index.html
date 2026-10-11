@@ -6,7 +6,7 @@
 <title>Driven Golf</title>
 <!-- script ?v= matches APP_VERSION in js/store.js: bump both on every release so phones never mix old and new files -->
 <!-- home-screen app: "Add to Home Screen" opens full screen as "Driven Golf" -->
-<link rel="manifest" href="manifest.webmanifest?v=0.9.3-beta">
+<link rel="manifest" href="manifest.webmanifest?v=0.9.4-beta">
 <meta name="theme-color" content="#1E3A2B">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -228,6 +228,9 @@
   .sheet .warn, .sheet .carry, .sheet .today { font-size: 13px; padding: 6px 10px; }
   .sheet .muted { font-size: 12.5px; }
   .note { font-size: 13.5px; }
+  .pinfo { font-size: 13.5px; } .pinfo b { font: 500 15px var(--head); }
+  .lockrow { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; font: italic 400 12.5px var(--head); color: var(--hunter); }
+  .chip.lock { box-shadow: inset 0 0 0 2px var(--brass); }
   .pflow { display: flex; flex-direction: column; gap: 10px; } .pflow .row .btn { text-transform: uppercase; }
   .hzlist { display: flex; flex-direction: column; }
   .hzlist .hl { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; font-size: 14px; }
@@ -299,8 +302,8 @@
 </head>
 <body>
 <div id="app"></div>
-<script src="js/geo.js?v=0.9.3-beta"></script>
-<script src="js/store.js?v=0.9.3-beta"></script>
-<script src="js/app.js?v=0.9.3-beta"></script>
+<script src="js/geo.js?v=0.9.4-beta"></script>
+<script src="js/store.js?v=0.9.4-beta"></script>
+<script src="js/app.js?v=0.9.4-beta"></script>
 </body>
 </html>

@@ -216,6 +216,208 @@ function targetWarnings(course, n, from, target) {
   return out;
 }
 
+// ---------------------------------------------------------------- planning: club picks, plan by club, Auto-plan
+const planKeysFor = par => par === 3 ? ["approach"] : par === 5 ? ["teeTarget", "layup", "approach"] : ["teeTarget", "approach"];
+// club for a planned shot: total yards for the tee shot (tee clubs on par 4/5) and layups, carry for approaches.
+// If the line crosses a bunker, red hazard or avoid zone, only clubs whose carry clears its far edge by 5+ yards
+// count; of those, the one whose total (carry if the target is on the green) is closest to the target.
+function pickShot(course, n, k, from, p) {
+  const h = holeOf(course, n), slug = course.slug;
+  const dist = Geo.yd(from, p), yd = plays(slug, dist), teeOnly = k === "teeTarget" && h.par > 3;
+  let hz = null;                                   // the crossed hazard with the farthest far edge short of the target
+  hazards(course, n).forEach(f => {
+    const kd = f.properties.kind;
+    if (!(kd === "bunker" || kd === "avoid" || isRed(f)) || !f.geometry.type.includes("Polygon")) return;
+    const rc = Geo.reachCarry([from, p], f.geometry, 1);
+    if (rc && rc.carry < dist - 3 && (!hz || rc.carry > hz.carry)) hz = { f, ...rc };
+  });
+  if (!hz) return clubPick(yd, k === "approach" ? "carry" : "total", teeOnly);
+  let bag = A.bag.filter(c => c.carry > 0); if (teeOnly && bag.some(c => c.tee)) bag = bag.filter(c => c.tee);
+  if (!bag.length) return null;                            // no bag numbers yet
+  bag = bag.slice().sort((a, b) => b.carry - a.carry);
+  const need = Math.round(plays(slug, hz.carry) + 5), name = panelName(hz.f).toLowerCase();
+  const info = { name, need, edge: Math.round(hz.carry), front: Math.round(hz.reach), longest: bag[0] };
+  const clears = bag.filter(c => c.carry >= need);
+  if (!clears.length) return { ...clubPick(yd, "carry", teeOnly), hz: { ...info, clears: false } };
+  const use = Geo.inRing(p, h.green) ? "carry" : "total";
+  const best = clears.reduce((a, c) => Math.abs(clubVal(c, use) - yd) < Math.abs(clubVal(a, use) - yd) ? c : a);
+  const i = bag.indexOf(best);
+  return { club: best, name: best.name, use, yards: Math.round(yd), up: bag[i - 1] || null, down: bag[i + 1] || null, between: null, noReach: false,
+    longest: bag[0], hz: { ...info, clears: true, past: Math.round(clubVal(best, use) - yd) } };
+}
+// the side to miss away from: bunkers, water, OB and avoid zones within 20 yd of the pin, red ones count triple
+function dangerSide(course, n, from, pin) {
+  const tally = { short: 0, long: 0, left: 0, right: 0 };
+  hazards(course, n).forEach(f => {
+    if (!["water", "bunker", "ob_area", "fence", "ob_line", "avoid"].includes(f.properties.kind)) return;
+    const d = Geo.distToGeom(pin, f.geometry) * YD; if (d > 20) return;
+    let best = null; Geo.linesOf(f.geometry).forEach(l => l.forEach(q => { const dd = Geo.yd(pin, q); if (!best || dd < best.d) best = { d: dd, q }; }));
+    if (!best) return;
+    const mm = Geo.miss(from, pin, best.q), w = isRed(f) ? 3 : 1;
+    if (Math.abs(mm.along) > Math.abs(mm.cross)) tally[mm.along > 0 ? "long" : "short"] += w; else tally[mm.cross > 0 ? "left" : "right"] += w;
+  });
+  const top = Object.entries(tally).sort((a, b) => b[1] - a[1])[0];
+  return top[1] > 0 ? top[0] : null;
+}
+// a club's yards at this course: My Bag numbers are at home; up high the ball flies ~2% farther per 1,000 ft
+const reachYd = (slug, yd) => playsLikeOn(slug) ? Math.round(yd * (1 + 0.02 * (meta(slug).elevationFt - A.settings.homeElevationFt) / 1000)) : yd;
+const shotUse = k => k === "approach" ? "carry" : "total";
+const centerLine = h => h.path.slice().reverse();          // tee … fairway middle … green center
+const toward = (from, to, dM) => { const d = Geo.xy(to, from), L0 = Math.hypot(d[0], d[1]) || 1; return Geo.ll([d[0] * dM / L0, d[1] * dM / L0], from); };
+// where a club sends the ball from `from`. Tee shots and layups: its total yards, straight-line, finishing on the fairway
+// center line (on a dogleg that's where that distance meets the center line, so a long club can reach through the corner).
+// Approaches: where it lands at its carry yards, on the line to the pin.
+function clubSpot(course, n, k, from, club, pin) {
+  const h = holeOf(course, n), dM = reachYd(course.slug, clubVal(club, shotUse(k))) / YD;
+  if (k === "approach") return toward(from, pinOrCenter(h, pin), dM);
+  const line = centerLine(h), total = Geo.length(line);
+  let prev = from, prevD = 0;
+  for (let s = Math.max(0, Geo.along(line, from).m); s <= total; s += 1) {
+    const p = Geo.pointAt(line, s), d = Geo.m(from, p);
+    if (d >= dM) { const t = d - prevD > 1e-6 ? (dM - prevD) / (d - prevD) : 1; return [prev[0] + (p[0] - prev[0]) * t, prev[1] + (p[1] - prev[1]) * t]; }
+    prev = p; prevD = d;
+  }
+  return toward(from, line.at(-1), dM);                    // past the green center: straight on
+}
+// "finishes 6 short of the pin" / "8 long" for an approach planned by club (its total vs the pin)
+function finishWords(course, n, from, club, pin) {
+  const h = holeOf(course, n), d = Math.round(reachYd(course.slug, clubVal(club, "total")) - Geo.yd(from, pinOrCenter(h, pin)));
+  return Math.abs(d) <= 2 ? "finishes at the pin" : `finishes ${Math.abs(d)} ${d < 0 ? "short of" : "past"} the pin`;
+}
+const polysOf = (course, n, kinds) => holeFeatures(course, n).filter(f => kinds.includes(f.properties.kind) && f.geometry.type.includes("Polygon"));
+const inFairway = (course, n, p) => polysOf(course, n, ["fairway"]).some(f => Geo.inside(p, f.geometry));
+// how far down the center line the fairway runs (fairway outline points near the line)
+function fairwayEnd(course, n) {
+  const line = centerLine(holeOf(course, n)); let end = 0;
+  polysOf(course, n, ["fairway"]).forEach(f => Geo.ringsOf(f.geometry).forEach(r => r.forEach(q => { const a = Geo.along(line, q); if (a.lateralM < 40) end = Math.max(end, a.m); })));
+  return end;
+}
+// where a planned spot lands badly: rough, a hazard, trees, out of bounds, or past the end of the fairway
+function spotWarnings(course, n, k, from, p) {
+  const h = holeOf(course, n), out = [];
+  polysOf(course, n, ["water", "bunker", "trees", "ob_area", "avoid"]).filter(f => Geo.inside(p, f.geometry)).forEach(f => {
+    const kd = f.properties.kind;
+    out.push({ red: isRed(f), msg: kd === "trees" ? "Lands in the trees" : kd === "ob_area" ? "Lands out of bounds" : `Lands in the ${hazardName(f).toLowerCase()}` });
+  });
+  holeFeatures(course, n).filter(f => ["ob_line", "fence"].includes(f.properties.kind)).forEach(f => {
+    if (Geo.crossings([from, p], f.geometry, 1).length) out.push({ red: true, msg: "Crosses the out-of-bounds line" });
+  });
+  if (!out.length && k !== "approach" && !Geo.inRing(p, h.green) && !inFairway(course, n, p)) {
+    const pastEnd = Geo.along(centerLine(h), p).m > fairwayEnd(course, n) + 3;
+    out.push({ red: false, msg: pastEnd ? "Runs past the end of the fairway" : "Finishes in the rough" });
+  }
+  return out;
+}
+// a club that doesn't carry a hazard on its line (bunker, red hazard, avoid zone): the hazard and the carry it needs
+function carryShort(course, n, from, p, club) {
+  let worst = null; const dist = Geo.yd(from, p), carry = reachYd(course.slug, club.carry);
+  hazards(course, n).forEach(f => {
+    const kd = f.properties.kind; if (!(kd === "bunker" || kd === "avoid" || isRed(f)) || !f.geometry.type.includes("Polygon")) return;
+    const rc = Geo.reachCarry([from, p], f.geometry, 1);
+    if (rc && rc.carry < dist - 3 && carry < rc.carry + 5 && (!worst || rc.carry + 5 > worst.need)) worst = { name: panelName(f).toLowerCase(), need: rc.carry + 5 };
+  });
+  return worst;
+}
+
+// ---- Auto-plan: a whole round from My Bag, the hazards, the tees and a middle pin
+const STRATEGIES = { safe: { label: "Safe", margin: 25, blurb: "Wide of trouble, lay up more" },
+  balanced: { label: "Balanced", margin: 15, blurb: "Longest club that stays safe" },
+  aggressive: { label: "Aggressive", margin: 8, blurb: "Tighter lines, go for par 5s" } };
+// red hazards, OB and avoid zones: what the safety margin is measured from
+function nearestTrouble(course, n, p) {
+  let best = null;
+  holeFeatures(course, n).filter(f => isRed(f) || f.properties.kind === "avoid").forEach(f => {
+    const d = Geo.distToGeom(p, f.geometry) * YD; if (!best || d < best.d) best = { d, f };
+  });
+  return best;
+}
+const troubleName = f => f.properties.kind === "water" ? "the water" : f.properties.kind === "avoid" ? (f.properties.name || "the avoid zone").toLowerCase() : "out of bounds";
+// the favorite full wedge: the wedge that carries closest to 100 yards
+function favWedge() {
+  const ws = A.bag.filter(c => c.carry > 0 && isWedge(c.name)), all = ws.length ? ws : A.bag.filter(c => c.carry > 0 && c.carry <= 130);
+  return all.reduce((a, c) => !a || Math.abs(c.carry - 100) < Math.abs(a.carry - 100) ? c : a, null);
+}
+// is this spot safe for a shot from `from` with this club: in the fairway, margin from trouble, carries what it crosses
+function spotCheck(course, n, k, from, p, club, margin) {
+  const nt = nearestTrouble(course, n, p), cs = carryShort(course, n, from, p, club), h = holeOf(course, n);
+  if (cs) return { ok: false, why: `doesn't carry the ${cs.name}`, trouble: `the ${cs.name}` };
+  if (nt && nt.d < margin) return { ok: false, why: `brings ${troubleName(nt.f)} into play`, trouble: troubleName(nt.f) };
+  if (k !== "approach" && Geo.yd(p, h.greenCenter) < 40 && !Geo.inRing(p, h.green)) return { ok: false, why: "runs up by the green" };
+  if (k !== "approach" && !inFairway(course, n, p)) return { ok: false, why: spotWarnings(course, n, k, from, p)[0]?.msg.toLowerCase().replace("finishes", "finishes") || "misses the fairway" };
+  return { ok: true, clear: nt ? Math.round(nt.d) : null };
+}
+// aim at the middle of the green; Safe and Balanced lean away from a bunker or water guarding one side
+function aimSpot(course, n, from, strat) {
+  const h = holeOf(course, n), c = h.greenCenter;
+  if (strat === "aggressive") return { p: c, note: "" };
+  const side = { left: 0, right: 0 }, what = { left: "", right: "" };
+  hazards(course, n).filter(f => ["bunker", "water"].includes(f.properties.kind)).forEach(f => {
+    if (Geo.distToGeom(c, f.geometry) * YD > 25) return;
+    let best = null; Geo.linesOf(f.geometry).forEach(l => l.forEach(q => { const d = Geo.m(c, q); if (!best || d < best.d) best = { d, q }; }));
+    const mm = Geo.miss(from, c, best.q), sd = mm.cross > 0 ? "left" : "right";
+    if (Math.abs(mm.cross) > Math.abs(mm.along) * 0.6) { side[sd] += f.properties.kind === "water" ? 3 : 1; if (!what[sd] || f.properties.kind === "water") what[sd] = f.properties.kind === "water" ? "water" : "bunker"; }
+  });
+  if (!side.left === !side.right) return { p: c, note: "" };              // both sides guarded or neither: the middle
+  const away = side.left ? -1 : 1, d = Geo.xy(c, from), L0 = Math.hypot(d[0], d[1]) || 1, perp = [-d[1] / L0 * away, d[0] / L0 * away];  // +1 = left
+  for (let yd = 5; yd >= 2; yd--) { const p = Geo.ll([perp[0] * yd / YD, perp[1] * yd / YD], c);
+    if (Geo.inRing(p, h.green)) return { p, note: `${yd} yd ${side.left ? "right" : "left"} of center, away from the ${what[side.left ? "left" : "right"]} on the ${side.left ? "left" : "right"}` }; }
+  return { p: c, note: "" };
+}
+function autoPlanHole(course, n, tees, strat) {
+  const h = holeOf(course, n), slug = course.slug, M = STRATEGIES[strat].margin, tee = teePoint(course, n, tees), out = { score: h.par };
+  const bag = A.bag.filter(c => c.carry > 0).slice().sort((a, b) => clubVal(b, "total") - clubVal(a, "total"));
+  const why = [];
+  let from = tee;
+  if (h.par > 3) {
+    // tee shot: the longest tee club whose spot stays in the fairway with the margin; step down (into irons if need be)
+    const teeClubs = bag.some(c => c.tee) ? bag.filter(c => c.tee) : bag, rest = bag.filter(c => !teeClubs.includes(c) && clubVal(c, "total") < clubVal(teeClubs.at(-1), "total"));
+    const tries = [...teeClubs, ...rest.slice(0, 4)].map(c => { const p = clubSpot(course, n, "teeTarget", tee, c); return { c, p, ...spotCheck(course, n, "teeTarget", tee, p, c, M) }; });
+    const pick = tries.find(t => t.ok) || tries.slice().sort((a, b) => (nearestTrouble(course, n, b.p)?.d ?? 999) - (nearestTrouble(course, n, a.p)?.d ?? 999))[0];
+    out.teeTarget = { p: pick.p, club: pick.c.name, clubSet: true, byClub: true };
+    const first = tries[0];
+    why.push(pick === first ? `${pick.c.name} finds the fairway${pick.clear != null && pick.clear < 40 ? `, ${pick.clear} yd from trouble` : ""}`
+      : !pick.ok ? `${pick.c.name} is the safest tee shot (no club stays clear: ${first.c.name} ${first.why})`
+      : first.trouble ? `${pick.c.name} keeps ${first.trouble} out of play` : `${pick.c.name} stays in the fairway (${first.c.name} ${first.why})`);
+    from = pick.p;
+  }
+  if (h.par === 5) {
+    // in two: only Balanced/Aggressive, a club (not the driver) that gets there and carries what guards the green with margin
+    const D = Geo.yd(from, h.greenCenter);
+    const goer = strat === "safe" ? null : bag.filter(c => !/driver/i.test(c.name)).reverse()
+      .find(c => reachYd(slug, clubVal(c, "total")) >= D - 10 && !carryShort(course, n, from, h.greenCenter, { ...c, carry: c.carry - M + 5 }));   // carry - margin still clears
+    if (goer) { why.push(`go for it in two with ${goer.name}`); out.goer = goer.name; }
+    else {
+      // lay up to the favorite full-wedge distance, on the center line, nudged to a safe fairway spot
+      const w = favWedge(), want = w ? reachYd(slug, w.carry) : 100, line = centerLine(h), total = Geo.length(line);
+      let s = total; while (s > 0 && Geo.yd(Geo.pointAt(line, s), h.greenCenter) < want) s -= 1;
+      const near = [0, -5, 5, -10, 10, -15, 15, -20, 20, -30, 30].map(dy => Geo.pointAt(line, s + dy / YD))
+        .filter(p => Geo.along(line, p).m > Geo.along(line, from).m + 20);
+      const safe = near.find(p => inFairway(course, n, p) && (nearestTrouble(course, n, p)?.d ?? 999) >= M) || near[0];
+      let lp = safe, club = safe ? pickShot(course, n, "layup", from, safe)?.club : null, byClub = false;
+      const longest = bag.filter(c => !/driver/i.test(c.name))[0];
+      if (!lp || (longest && Geo.yd(from, lp) > reachYd(slug, clubVal(longest, "total")) + 5)) {   // can't get that far: the longest layup
+        club = longest; lp = clubSpot(course, n, "layup", from, longest); byClub = true;
+        why.push(`lay up with ${longest.name}, leaving ${Math.round(Geo.yd(lp, h.greenCenter))}`);
+      } else why.push(`lay up to ${Math.round(Geo.yd(lp, h.greenCenter))} for a full ${w ? w.name : "wedge"}`);
+      if (lp) { out.layup = { p: lp, club: club?.name || null, clubSet: byClub, byClub }; from = lp; }
+    }
+  }
+  // approach: the middle of the green, leaning away from a guarded side on Safe and Balanced
+  const aim = aimSpot(course, n, from, strat), ak = out.goer || pickShot(course, n, "approach", from, aim.p)?.name;
+  out.approach = { p: aim.p, club: ak || null, clubSet: !!out.goer, byClub: false }; delete out.goer;
+  why.push(out.approach.clubSet ? (aim.note ? `aim ${aim.note}` : "") : `${ak ? ak + " " : ""}${aim.note || "to the middle of the green"}`);
+  out.danger = dangerSide(course, n, from, h.greenCenter);
+  const s = why.filter(Boolean).join("; "); out.reason = s[0].toUpperCase() + s.slice(1) + ".";
+  out.auto = strat;
+  return out;
+}
+function autoPlan(slug, tees, strat) {
+  const course = A.courses[slug], st = STRATEGIES[strat];
+  const p = { id: Store.id(), course: slug, tees, name: `${meta(slug).name} · ${tees} · Auto-plan (${st.label}) · ${new Date().toLocaleDateString()}`, created: Date.now(), holes: {}, strategy: strat };
+  course.holes.forEach(h => { p.holes[h.n] = autoPlanHole(course, h.n, tees, strat); });
+  Store.savePlan(p); return p;
+}
+
 // ---------------------------------------------------------------- screens
 // ---- feedback: a pre-filled email with the app version and where the tester was
 A.where = { screen: "Home" };
@@ -531,7 +733,24 @@ async function coursePage(slug) {
 }
 
 // Plan a round: club -> course (when the club has more than one) -> tees (my preferred tees first) -> hole-by-hole plan
+// Plan a round: plan it myself, or Auto-plan (Safe / Balanced / Aggressive) builds every hole from My Bag; then club → course → tees
 function planWizard() {
+  const md = modal(`<h3 style="margin:0">Plan a round</h3>
+    <div class="card" style="gap:8px"><b class="head" style="font:500 17px var(--head)">Auto-plan</b><p>Every hole planned from your bag, the hazards and your tees, with a middle pin. You can change anything after.</p>
+      <div class="seg" id="strat">${Object.entries(STRATEGIES).map(([k, v]) => `<button data-s="${k}" class="${k === "balanced" ? "on" : ""}" style="flex:1;text-align:center">${v.label}</button>`).join("")}</div>
+      <div class="muted" id="sblurb">${STRATEGIES.balanced.blurb}</div>
+      <button class="btn" id="auto">Auto-plan</button></div>
+    <button class="btn alt" id="self">Plan it myself</button><button class="linkbtn" id="wx0" style="align-self:center">Cancel</button>`);
+  let strat = "balanced";
+  md.querySelectorAll("[data-s]").forEach(b => b.onclick = () => { strat = b.dataset.s; md.querySelectorAll("[data-s]").forEach(x => x.classList.toggle("on", x === b)); $("#sblurb", md).textContent = STRATEGIES[strat].blurb; });
+  $("#wx0", md).onclick = () => md.remove();
+  $("#self", md).onclick = () => { md.remove(); pickCourse(null); };
+  $("#auto", md).onclick = () => {
+    if (A.bag.filter(c => c.carry > 0).length < 3) return toast("Auto-plan needs your club yardages. Add them in My Bag (Member Profile).", 3500);
+    md.remove(); pickCourse(strat);
+  };
+}
+function pickCourse(strat) {
   const clubs = [...new Set(A.index.map(c => c.name))];
   const step = (title, items, pick) => {
     const md = modal(`<h3 style="margin:0">${esc(title)}</h3><div class="list" id="wl"></div><button class="btn alt" id="wx">Cancel</button>`);
@@ -543,9 +762,9 @@ function planWizard() {
     const course = await loadCourse(slug), pref = A.settings.prefTees?.[slug];
     const order = pref && course.teeOrder.includes(pref) ? [pref, ...course.teeOrder.filter(t => t !== pref)] : course.teeOrder;
     step(`${meta(slug).name} · ${meta(slug).course} · tees`, order.map(t => [t, `${course.tees[t].reduce((a, c) => a + c, 0).toLocaleString()} yd${t === pref ? " · your preferred tees" : ""}`, t]),
-      t => newPlan(slug, t));
+      t => strat ? planSummary(autoPlan(slug, t, strat).id) : newPlan(slug, t));
   };
-  step("Plan a round · club", clubs.map(n => [n, A.index.find(c => c.name === n).city, n]), name => {
+  step(strat ? `Auto-plan (${STRATEGIES[strat].label}) · club` : "Plan a round · club", clubs.map(n => [n, A.index.find(c => c.name === n).city, n]), name => {
     const courses = A.index.filter(c => c.name === name);
     if (courses.length === 1) return tees(courses[0].slug);
     step(`${name} · course`, courses.map(c => [c.course, null, c.slug]), tees);
@@ -957,7 +1176,7 @@ async function holeView(ctx) {
   const tee = (rh?.tee) || (ph?.tee) || ctx.tees;
   const teeP = teePoint(course, n, tee);
   const getPin = () => (rh ? rh.pin : ph ? ph.pin : ctx.pins?.[n]) || null;
-  const setPin = p => { if (rh) rh.pin = p; else if (ph) ph.pin = p; else (ctx.pins = ctx.pins || {})[n] = p; persist(); };
+  const setPin = p => { if (rh) rh.pin = p; else if (ph) ph.pin = p; else (ctx.pins = ctx.pins || {})[n] = p; persist(); if (ph) afterPlanChange(null); };
   const persist = () => { if (round) Store.saveRound(round); if (plan) Store.savePlan(plan); };
   // keep the pin on the green: a drop off the green goes to the nearest point 1 m inside its edge
   const onGreen = p => {
@@ -1089,10 +1308,9 @@ async function holeView(ctx) {
     if (tapMode === "pin") { setPin(onGreen(p)); drawAll(); return; }
     if (["teeTarget", "layup", "approach"].includes(tapMode)) {
       const k = tapMode; const from = planOrigin(k); const yd = Geo.yd(from, p);
-      ph[k] = { p, club: ph[k]?.clubSet ? ph[k].club : pickFor(k, from, p)?.name || null, clubSet: ph[k]?.clubSet };
+      ph[k] = { p, club: pickFor(k, from, p)?.name || null, clubSet: false, byClub: false };   // dropped by hand: the club is picked for me
       if (!ph.score) ph.score = h.par;
-      if (k === "approach" && !ph.dangerSet) ph.danger = suggestDanger();
-      persist(); setTap(null); drawAll(); return;
+      setTap(null); afterPlanChange(k); return;
     }
     if (tapMode === "ball") { addBall(p, "tap"); setTap(null); return; }
     if (tapMode === "green") { addBall(p, "tap", true); setTap(null); askPutts(); return; }
@@ -1125,73 +1343,56 @@ async function holeView(ctx) {
   }
 
   // ---- plan helpers
-  const planKeys = h.par === 3 ? ["approach"] : h.par === 5 ? ["teeTarget", "layup", "approach"] : ["teeTarget", "approach"];
+  const planKeys = planKeysFor(h.par);
   const KEYNAME = { teeTarget: "Tee shot", layup: "Layup", approach: h.par === 3 ? (m.teeShots === "shortgame" ? "Tee shot (short game)" : "Tee shot (approach)") : "Approach" };
-  // club for a planned shot: total yards for the tee shot (tee clubs on par 4/5) and layups, carry for approaches.
-  // If the line crosses a bunker, red hazard or avoid zone, only clubs whose carry clears its far edge by 5+ yards
-  // count; of those, the one whose total (carry if the target is on the green) is closest to the target.
-  function pickFor(k, from, p) {
-    const dist = Geo.yd(from, p), yd = plays(ctx.slug, dist), teeOnly = k === "teeTarget" && h.par > 3;
-    let hz = null;                                   // the crossed hazard with the farthest far edge short of the target
-    hazards(course, n).forEach(f => {
-      const kd = f.properties.kind;
-      if (!(kd === "bunker" || kd === "avoid" || isRed(f)) || !f.geometry.type.includes("Polygon")) return;
-      const rc = Geo.reachCarry([from, p], f.geometry, 1);
-      if (rc && rc.carry < dist - 3 && (!hz || rc.carry > hz.carry)) hz = { f, ...rc };
-    });
-    if (!hz) return clubPick(yd, k === "approach" ? "carry" : "total", teeOnly);
-    let bag = A.bag.filter(c => c.carry > 0); if (teeOnly && bag.some(c => c.tee)) bag = bag.filter(c => c.tee);
-    if (!bag.length) return null;                            // no bag numbers yet
-    bag = bag.slice().sort((a, b) => b.carry - a.carry);
-    const need = Math.round(plays(ctx.slug, hz.carry) + 5), name = panelName(hz.f).toLowerCase();
-    const info = { name, need, edge: Math.round(hz.carry), front: Math.round(hz.reach), longest: bag[0] };
-    const clears = bag.filter(c => c.carry >= need);
-    if (!clears.length) return { ...clubPick(yd, "carry", teeOnly), hz: { ...info, clears: false } };
-    const use = Geo.inRing(p, h.green) ? "carry" : "total";
-    const best = clears.reduce((a, c) => Math.abs(clubVal(c, use) - yd) < Math.abs(clubVal(a, use) - yd) ? c : a);
-    const i = bag.indexOf(best);
-    return { club: best, name: best.name, use, yards: Math.round(yd), up: bag[i - 1] || null, down: bag[i + 1] || null, between: null, noReach: false,
-      longest: bag[0], hz: { ...info, clears: true, past: Math.round(clubVal(best, use) - yd) } };
-  }
+  const pickFor = (k, from, p) => pickShot(course, n, k, from, p);
+  // a planned shot's club, two ways that stay in sync: drop a target and the club is picked for me, or tap a club in the
+  // strip (tee clubs first on tee shots) and the target goes where that club sends it, with the club locked
   function clubPickHTML(k, from, t) {
-    const pk = pickFor(k, from, t.p), cur = A.bag.find(c => c.name === t.club) || pk?.club;
-    if (!cur) return "";
-    const order = A.bag.slice().sort((a, b) => b.carry - a.carry), i = order.findIndex(c => c.name === cur.name);
-    const up = order[i - 1], dn = order[i + 1], hz = pk?.hz;
-    let note = pickNote(pk), line = clubLine(cur);
-    if (hz) {   // the line has to carry a hazard: show what it takes and what this club does
-      const tot = cur.total || cur.carry, use = pk.use;
-      line = `${cur.name} · ${cur.carry >= hz.need ? "carries" : "doesn't carry"} ${hz.name} (${hz.need} needed, ${cur.carry} carry) · ${use === "carry" ? `${cur.carry} carry` : `${tot} total`} to ${pk.yards} target`;
-      const past = (use === "carry" ? cur.carry : tot) - pk.yards;
+    const pk = t.p ? pickFor(k, from, t.p) : null, cur = t.p ? A.bag.find(c => c.name === t.club) || pk?.club : null, use = shotUse(k);
+    let order = A.bag.filter(c => c.carry > 0).sort((a, b) => clubVal(b, use) - clubVal(a, use));
+    if (k === "teeTarget" && h.par > 3) order = [...order.filter(c => c.tee), ...order.filter(c => !c.tee)];
+    const strip = `<div class="clubstrip">${order.map(c => `<button class="chip${cur?.name === c.name ? " on" : ""}${t.byClub && cur?.name === c.name ? " lock" : ""}" data-byclub="${k}|${esc(c.name)}">${esc(clubAbbr(c.name) || c.name)}</button>`).join("")}</div>`;
+    if (!cur) return strip;
+    const here = v => playsLikeOn(ctx.slug) ? `${v} (~${reachYd(ctx.slug, v)} here)` : `${v}`;
+    const what = k === "approach" ? `${here(cur.carry)} carry · ${finishWords(course, n, from, cur, getPin())}` : `${here(clubVal(cur, "total"))} total`;
+    let note = "";
+    if (t.byClub) { const cs = carryShort(course, n, from, t.p, cur); if (cs) note = `${cur.name} doesn't carry the ${cs.name} (needs ${Math.round(cs.need)}).`; }
+    else if (pk?.hz) {   // the line has to carry a hazard: what it takes and what this club does
+      const hz = pk.hz, past = clubVal(cur, pk.use) - pk.yards;
       note = !hz.clears ? `No club carries the ${hz.name} (${hz.need} needed; your longest carry is ${hz.longest.name} ${hz.longest.carry}). Lay up short of it: keep this shot under ${hz.front} yards.`
         : cur.carry < hz.need ? `${cur.name} doesn't clear the ${hz.name} (${hz.need} needed). ${pk.name} does.`
         : past > 10 ? `${cur.name} clears the ${hz.name} but finishes ${past} past your target. Move the target or lay up short of the ${hz.name}.` : "";
-    }
-    return `<div class="clubpick"><button class="btn small alt" ${up ? `data-pickclub="${k}|${esc(up.name)}"` : "disabled"}>▲ ${up ? esc(up.name) : ""}</button>
-      <b>${esc(line)}</b><button class="btn small alt" ${dn ? `data-pickclub="${k}|${esc(dn.name)}"` : "disabled"}>▼ ${dn ? esc(dn.name) : ""}</button></div>
-      <div class="muted" style="font-size:12px">${pk?.hz ? `Has to carry the ${esc(pk.hz.name)}: its far edge is ${pk.hz.edge} yards away. ` : ""}Picked by ${pk?.use === "total" ? "total" : "carry"} yards${t.clubSet ? ` · you chose ${esc(t.club)} <button class="linkbtn" data-autoclub="${k}">use the suggestion (${esc(pk?.name || "")})</button>` : ""}</div>
+    } else note = pickNote(pk);
+    return `<div class="pinfo"><b>${esc(cur.name)}</b> · ${esc(what)}</div>${strip}
+      ${t.byClub ? `<div class="lockrow">Club locked: drag the target to aim left or right <button class="linkbtn" data-unlock="${k}">Unlock</button></div>`
+        : `<div class="muted">Picked for this target by ${pk?.use === "total" ? "total" : "carry"} yards. Tap a club to place it by club instead.</div>`}
       ${note ? `<div class="warn">${esc(note)}</div>` : ""}`;
+  }
+  function placeByClub(k, name) {
+    const c = A.bag.find(x => x.name === name); if (!c) return;
+    ph[k] = { ...(ph[k] || {}), p: clubSpot(course, n, k, planOrigin(k), c, getPin()), club: name, clubSet: true, byClub: true };
+    if (!ph.score) ph.score = h.par;
+    if (tapMode === k) setTap(null);
+    afterPlanChange(k);
+  }
+  // something earlier changed (a target, or the pin): targets set by club re-place from their new start with the same
+  // club; targets I dropped by hand stay put and re-pick their club (unless I picked one)
+  function afterPlanChange(k) {
+    if (k) ph.edited = true;                                 // Auto-plan's reason no longer tells the whole story
+    planKeys.slice(planKeys.indexOf(k) + 1).forEach(j => { const t = ph[j]; if (!t?.p) return;
+      const c = A.bag.find(x => x.name === t.club);
+      if (t.byClub && c) t.p = clubSpot(course, n, j, planOrigin(j), c, getPin());
+      else if (!t.clubSet) t.club = pickFor(j, planOrigin(j), t.p)?.name || null; });
+    if (!ph.dangerSet && ph.approach?.p) ph.danger = suggestDanger();
+    persist(); drawAll(false);
   }
   function planOrigin(k) {
     const i = planKeys.indexOf(k);
     for (let j = i - 1; j >= 0; j--) if (ph?.[planKeys[j]]?.p) return ph[planKeys[j]].p;
     return teeP;
   }
-  function suggestDanger() {
-    const pin = pinOrCenter(h, getPin()), from = planOrigin("approach");
-    const tally = { short: 0, long: 0, left: 0, right: 0 };
-    hazards(course, n).forEach(f => {
-      if (!["water", "bunker", "ob_area", "fence", "ob_line", "avoid"].includes(f.properties.kind)) return;
-      const d = Geo.distToGeom(pin, f.geometry) * YD; if (d > 20) return;
-      // nearest point direction: sample the hazard's outline
-      let best = null; Geo.linesOf(f.geometry).forEach(l => l.forEach(q => { const dd = Geo.yd(pin, q); if (!best || dd < best.d) best = { d: dd, q }; }));
-      if (!best) return;
-      const mm = Geo.miss(from, pin, best.q), w = isRed(f) ? 3 : 1;
-      if (Math.abs(mm.along) > Math.abs(mm.cross)) tally[mm.along > 0 ? "long" : "short"] += w; else tally[mm.cross > 0 ? "left" : "right"] += w;
-    });
-    const top = Object.entries(tally).sort((a, b) => b[1] - a[1])[0];
-    return top[1] > 0 ? top[0] : null;
-  }
+  const suggestDanger = () => dangerSide(course, n, planOrigin("approach"), pinOrCenter(h, getPin()));
 
   // ---- round helpers
   const shots = () => (rh.shots = rh.shots || []);
@@ -1448,8 +1649,13 @@ async function holeView(ctx) {
       planKeys.forEach((k, ki) => { if (!P[k]?.p) return;
         let o = teeToday(); for (let j = ki - 1; j >= 0; j--) if (P[planKeys[j]]?.p) { o = P[planKeys[j]].p; break; }
         const lbl = `${Math.round(Geo.yd(o, P[k].p))}${P[k].club ? ` ${clubAbbr(P[k].club)}` : ""}`;
+        // club locked: the target slides along an arc at that club's distance, so I can aim left or right
+        const arc = ll => { const c = ph?.[k]?.byClub && A.bag.find(x => x.name === ph[k].club);
+          return c ? toward(planOrigin(k), [ll.lat, ll.lng], reachYd(ctx.slug, clubVal(c, shotUse(k))) / YD) : [ll.lat, ll.lng]; };
         L.marker(P[k].p, { icon: tgtIcon(k === "teeTarget" ? "T" : k === "layup" ? "L" : "A", true, lbl), draggable: ctx.mode === "plan", zIndexOffset: 600 }).addTo(top)
-        .on("dragend", e => { if (ctx.mode !== "plan") return; const ll = e.target.getLatLng(); ph[k].p = [ll.lat, ll.lng]; if (!ph[k].clubSet) ph[k].club = pickFor(k, planOrigin(k), ph[k].p)?.name || null; persist(); drawAll(false); }); });
+        .on("drag", e => { if (ph?.[k]?.byClub) e.target.setLatLng(arc(e.target.getLatLng())); })
+        .on("dragend", e => { if (ctx.mode !== "plan") return; ph[k].p = arc(e.target.getLatLng());
+          if (!ph[k].clubSet) ph[k].club = pickFor(k, planOrigin(k), ph[k].p)?.name || null; afterPlanChange(k); }); });
     } else if (ctx.mode !== "round") {
       L.polyline(playLine(h, teeP, getPin()), { pane: "lines", color: LC, weight: 1.6, dashArray: "6 6", opacity: .9, interactive: false }).addTo(top);
     }
@@ -1593,14 +1799,14 @@ async function holeView(ctx) {
       planKeys.forEach(k => {
         const t = ph[k]; const from = planOrigin(k);
         const yd = t?.p ? Math.round(Geo.yd(from, t.p)) : null;
-        const warns = t?.p ? targetWarnings(course, n, from, t.p) : [];
+        const warns = t?.p ? [...spotWarnings(course, n, k, from, t.p), ...targetWarnings(course, n, from, t.p)].map(w => ({ ...w, msg: w.msg[0].toLowerCase() + w.msg.slice(1) })) : [];
         cards += `<div class="pcard"><div class="pch"><b>${KEYNAME[k]}</b>
           ${yd != null ? `<span class="num">${yd} yd${playsTxt(ctx.slug, yd)}</span>` : '<span class="muted">not set</span>'}
           <button class="btn small${tapMode === k ? "" : " alt"}" data-set="${k}">${t?.p ? "Move" : "Set"}</button></div>
-          ${t?.p ? clubPickHTML(k, from, t) : ""}
+          ${clubPickHTML(k, from, t || {})}
           ${warns.map(w => `<div class="warn${w.red ? " red" : ""}">Heads up: ${esc(w.msg)}. You can keep this target.</div>`).join("")}</div>`;
       });
-      half += sec("Your plan", cards) + hzHalf;
+      half += (ph.reason ? sec(ph.edited ? "Auto-plan's first idea · you've changed this hole" : `Why${ph.auto ? ` · Auto-plan, ${STRATEGIES[ph.auto]?.label || ""}` : ""}`, `<div class="it">${esc(ph.reason)}</div>`) : "") + sec("Your plan", cards) + hzHalf;
       full += fullNotes;
       full += sec(`Danger side${ph.dangerSet ? "" : " (suggested)"}`, `<div class="chips">${["short", "long", "left", "right"].map(d => `<button class="chip${ph.danger === d ? " on" : ""}" data-danger="${d}">${d}</button>`).join("")}</div>`);
       const sc = ph.score || h.par;   // shown as par until you change it or set a target
@@ -1669,8 +1875,9 @@ async function holeView(ctx) {
     on("sum", () => ctx.mode === "plan" ? planSummary(plan.id) : roundSummary(round.id));
     if (ctx.mode === "plan") {
       sh.querySelectorAll("[data-set]").forEach(b => b.onclick = () => setTap(tapMode === b.dataset.set ? null : b.dataset.set));
-      sh.querySelectorAll("[data-pickclub]").forEach(x => x.onclick = () => { const [k, c] = x.dataset.pickclub.split("|"); ph[k].club = c; ph[k].clubSet = true; persist(); renderSheet(); });
-      sh.querySelectorAll("[data-autoclub]").forEach(x => x.onclick = () => { const k = x.dataset.autoclub; ph[k].clubSet = false; ph[k].club = pickFor(k, planOrigin(k), ph[k].p)?.name || null; persist(); renderSheet(); });
+      sh.querySelectorAll("[data-byclub]").forEach(x => x.onclick = () => { const [k, c] = x.dataset.byclub.split("|"); placeByClub(k, c); });
+      sh.querySelectorAll("[data-unlock]").forEach(x => x.onclick = () => { const k = x.dataset.unlock; ph[k].byClub = false; ph[k].clubSet = false;
+        ph[k].club = pickFor(k, planOrigin(k), ph[k].p)?.name || null; afterPlanChange(k); });
       sh.querySelectorAll("[data-danger]").forEach(x => x.onclick = () => { ph.danger = ph.danger === x.dataset.danger ? null : x.dataset.danger; ph.dangerSet = true; persist(); renderSheet(); });
       on("sm", () => { ph.score = Math.max(1, (ph.score || h.par) - 1); persist(); renderSheet(); });
       on("sp", () => { ph.score = (ph.score || h.par) + 1; persist(); renderSheet(); });
@@ -1709,11 +1916,12 @@ async function planSummary(id) {
     const ph = p.holes[h.n] || {}; const tee = teePoint(course, h.n, ph.tee || p.tees);
     const parts = keys(h.par).map(k => { const t = ph[k]; if (!t?.p) return "–"; let from = tee;
       const ks = keys(h.par); for (let j = ks.indexOf(k) - 1; j >= 0; j--) if (ph[ks[j]]?.p) { from = ph[ks[j]].p; break; }
-      return `${esc(t.club || "?")} ${Math.round(Geo.yd(from, t.p))}`; }).join(" → ");
-    rows += `<tr${(p.changed || []).includes(h.n) ? ' style="background:#fff3cd"' : ""}><td><b>${h.n}</b></td><td>${h.par}</td><td>${parts}</td><td>${esc(ph.danger || "")}</td><td>${ph.pin ? "moved" : "center"}</td><td class="num"><b>${ph.score || "–"}</b></td></tr>`;
+      return `${esc(t.club || "?")} ${Math.round(Geo.yd(from, t.p))}`; }).filter((x, i, a) => x !== "–" || a.every(y => y === "–")).join(" → ");   // a skipped layup (in two) drops out
+    rows += `<tr${(p.changed || []).includes(h.n) ? ' style="background:#fff3cd"' : ""} data-n="${h.n}" style="cursor:pointer"><td><b>${h.n}</b></td><td>${h.par}</td><td>${parts}${ph.reason ? `<div class="muted it" style="font-size:12px">${esc(ph.reason)}</div>` : ""}</td><td>${esc(ph.danger || "")}</td><td>${ph.pin ? "moved" : "center"}</td><td class="num"><b>${ph.score || "–"}</b></td></tr>`;
   });
   const card = el(`<div class="card"><label class="f">Plan name<input id="nm" value="${esc(p.name)}"></label>
     <div class="muted">${esc(meta(p.course).name)} · ${esc(p.tees)} tees · planned total <b>${planTotal(p) || "–"}</b> (par ${course.par.reduce((a, c) => a + c, 0)})</div>
+    ${p.strategy ? `<div class="carry">Auto-plan, ${esc(STRATEGIES[p.strategy]?.label || p.strategy)}. Tap a hole to review it: drag any target or tap a club to change it. It's saved as you go.</div>` : ""}
     ${(p.changed || []).length ? `<div class="warn">Highlighted holes: the club probably changes from the ${esc(p.copiedFromTees)} plan.</div>` : ""}
     <div class="tablewrap"><table class="t"><tr><th>#</th><th>Par</th><th>Targets (club yd)</th><th>Danger</th><th>Pin</th><th>Score</th></tr>${rows}</table></div>
     <div class="row"><button class="btn" id="edit">Edit holes</button><button class="btn alt" id="play">Play this plan</button></div>
@@ -1721,6 +1929,7 @@ async function planSummary(id) {
   b.appendChild(card);
   $("#nm", card).onchange = e => { p.name = e.target.value; Store.savePlan(p); };
   $("#edit", card).onclick = () => holeView({ mode: "plan", slug: p.course, tees: p.tees, n: 1, planId: p.id });
+  card.querySelectorAll("tr[data-n]").forEach(tr => tr.onclick = () => holeView({ mode: "plan", slug: p.course, tees: p.tees, n: +tr.dataset.n, planId: p.id }));
   $("#play", card).onclick = () => { const r = { id: Store.id(), course: p.course, tees: p.tees, date: Date.now(), planId: p.id, holes: {} };
     Object.entries(p.holes).forEach(([n, ph]) => { r.holes[n] = {}; if (ph.pin) r.holes[n].pin = ph.pin; if (ph.tee) r.holes[n].tee = ph.tee; });
     Store.saveRound(r); holeView({ mode: "round", slug: p.course, tees: p.tees, n: 1, roundId: r.id }); };

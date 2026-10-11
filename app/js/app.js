@@ -308,14 +308,15 @@ function spotWarnings(course, n, k, from, p) {
   }
   return out;
 }
-// ---- the lie: where a ball sits, read from the map. Green, Sand, Penalty area (water), Fringe (within ~3 yd of the green),
+// ---- the lie: where a ball sits, read from the map. Green, Sand, Penalty area (water), Out of bounds, Fringe (within ~3 yd of the green),
 // Tee, Fairway, Trees (a wood or tree row), else Rough. Shots saved before lies existed count as "unknown".
-const LIES = ["Tee", "Fairway", "Rough", "Fringe", "Sand", "Trees", "Green", "Penalty area"];
+const LIES = ["Tee", "Fairway", "Rough", "Fringe", "Sand", "Trees", "Green", "Penalty area", "Out of bounds"];
 function lieOf(course, n, p) {
   const h = holeOf(course, n), inK = kinds => polysOf(course, n, kinds).some(f => Geo.inside(p, f.geometry));
   if (Geo.inRing(p, h.green)) return "Green";
   if (inK(["bunker"])) return "Sand";
-  if (inK(["water", "ob_area"])) return "Penalty area";
+  if (inK(["water"])) return "Penalty area";
+  if (inK(["ob_area"])) return "Out of bounds";
   if (Geo.distToGeom(p, greenGeom(h)) * YD <= 3) return "Fringe";
   if (inK(["tee_box"])) return "Tee";
   if (inK(["fairway"])) return "Fairway";
@@ -330,6 +331,24 @@ function lieGuess(course, n, p) {
   return { lie, lieAlt: alts.slice(0, 3) };
 }
 const lieOfShot = x => x?.lie || "unknown";
+// ---- penalties. A shot can end "ob" (out of bounds: +1, the next shot is played from the previous spot, stroke and
+// distance; prov = played as a provisional) or "pa" (penalty area: +1, the next shot is played from the drop spot I
+// tapped). Other penalties are the plain count rh.penalties (older rounds only have that).
+function playFrom(sh, i) {                                   // where the shot after shot i is played from
+  const x = sh[i]; if (!x) return null;
+  if (x.out === "ob") return i > 0 ? playFrom(sh, i - 1) : x.p;
+  if (x.out === "pa" && x.drop) return x.drop;
+  return x.p;
+}
+function startLie(sh, i) {                                   // the lie the shot after shot i is played from
+  const x = sh[i]; if (!x) return "unknown"; if (i === 0) return "Tee";
+  if (x.out === "ob") return startLie(sh, i - 1);
+  if (x.out === "pa") return x.dropLie || "unknown";
+  return lieOfShot(x);
+}
+const strokeNo = (sh, i) => i + sh.slice(1, i).filter(x => x.out).length;   // shot i's stroke number, counting penalty strokes before it
+const penOf = rh => { const sh = rh?.shots || []; return { ob: sh.filter(x => x.out === "ob").length, pa: sh.filter(x => x.out === "pa").length, other: rh?.penalties || 0 }; };
+const penWords = p => [p.ob && `${p.ob} OB`, p.pa && `${p.pa} penalty area`, p.other && `${p.other} other penalty`].filter(Boolean).join(" · ");
 // a club that doesn't carry a hazard on its line (bunker, red hazard, avoid zone): the hazard and the carry it needs
 function carryShort(course, n, from, p, club) {
   let worst = null; const dist = Geo.yd(from, p), carry = reachYd(course.slug, club.carry);
@@ -671,6 +690,12 @@ async function statsPage() {
     ${rs.buckets.map((x, i) => `<tr><td>Made from ${x.label}</td><td>${cell(x.made, x.n)}</td><td>${cell(pr.buckets[i].made, pr.buckets[i].n)}</td></tr>`).join("")}
     <tr><td>Lags from 30+ ft inside 3 ft</td><td>${cell(rs.lagIn, rs.lagN)}</td><td>${cell(pr.lagIn, pr.lagN)}</td></tr></table></div>
     <p class="muted">Log each putt with Log putts on the green, or on a practice page's putting green. Lag = a putt from over 30 ft that goes in or finishes within 3 ft.</p></div>`));
+  const pens = rounds.map(r => Object.values(r.holes).reduce((t, hh) => { const p = penOf(hh); t.ob += p.ob; t.pa += p.pa; t.other += p.other; return t; }, { ob: 0, pa: 0, other: 0 }));
+  const pRow = (lab, k) => `<tr><td>${lab}</td><td class="num">${pens.reduce((a, p) => a + p[k], 0)}</td><td class="num">${rounds.length ? (pens.reduce((a, p) => a + p[k], 0) / rounds.length).toFixed(1) : "–"}</td></tr>`;
+  b.appendChild(el(`<h2>Penalty strokes</h2>`));
+  b.appendChild(el(`<div class="card"><div class="tablewrap"><table class="t"><tr><th></th><th>Total</th><th>Per round</th></tr>
+    ${pRow("Out of bounds", "ob")}${pRow("Penalty area", "pa")}${pens.some(p => p.other) ? pRow("Other", "other") : ""}</table></div>
+    <p class="muted">Out of bounds is stroke and distance: one stroke, then you play again from where you hit it. A penalty area (water, red or yellow stakes) is one stroke, then you play from your drop.${pens.some(p => p.other) ? " Other = Other penalty +1, plus all penalties in rounds logged before version 0.9.7." : ""}</p></div>`));
   b.appendChild(el(`<h2>By lie</h2>`)); lieStatsCard(b);
   b.appendChild(el(`<h2>Rounds</h2>`));
   const rl = el(`<div class="card list"></div>`);
@@ -796,7 +821,7 @@ function bagLearning() {
     const sh = hh.shots || [];
     for (let i = 0; i < sh.length - 1; i++) {
       const c = sh[i].club; if (!c || c === "Putter") continue;
-      const d = Geo.yd(sh[i].p, sh[i + 1].p);
+      const d = Geo.yd(playFrom(sh, i), sh[i + 1].p);
       (tot[c] = tot[c] || []).push(d);
       if (sh[i + 1].onGreen) (car[c] = car[c] || []).push(d);
     }
@@ -1295,6 +1320,7 @@ async function holeView(ctx) {
   const HINTS = { pin: "Drag the flag, tap the green, or pick a preset. Press and hold to magnify.",
     teeTarget: "Tap where you want your tee shot to finish.", layup: "Tap your layup target.", approach: "Tap your approach target.",
     ball: "Tap where your ball is. Press and hold to magnify.", green: "Tap where your ball finished on the green.",
+    drop: "Tap where you dropped: within 2 club-lengths of where it crossed into the penalty area, or back on the line.",
     trace: "Tap around the area to outline it, then press Done." };
   function setTap(mode) {
     tapMode = mode;
@@ -1316,6 +1342,9 @@ async function holeView(ctx) {
     }
     if (tapMode === "ball") { addBall(p, "tap"); setTap(null); return; }
     if (tapMode === "green") { addBall(p, "tap", true); setTap(null); askPutts(); return; }
+    if (tapMode === "drop") { const sh = rh.shots, b = sh.at(-1), b0 = snap(), l = lieOf(course, n, p);
+      b.drop = p; b.dropLie = ["Penalty area", "Out of bounds"].includes(l) ? "Rough" : l; rh.nextClub = null; rh.clubFor = null; tapMode = null; setTap(null); persist(); aim();
+      undoBar(`Dropped · hit ${strokeNo(sh, sh.length - 1) + 2} from the ${b.dropLie.toLowerCase()}`, b0); return; }
     if (tapMode === "trace") { trace.push(p); drawAll(); return; }
   }
 
@@ -1406,7 +1435,7 @@ async function holeView(ctx) {
     if (map.setBearing) map.setBearing(-A.holeBearing * (A.bearingSign || 1));
     frame();
   }
-  function ballSpot() { const sh = rh?.shots || []; return sh.length ? sh.at(-1).p : teeToday(); }
+  function ballSpot() { const sh = rh?.shots || []; return sh.length ? playFrom(sh, sh.length - 1) : teeToday(); }
   function addBall(p, src, onGreen = false) {
     const sh = shots();
     if (!sh.length) {                                        // where you really teed off
@@ -1418,7 +1447,7 @@ async function holeView(ctx) {
     const before = snap();
     sh.push({ p, club: null, src, onGreen, ...(onGreen ? { lie: "Green", lieAlt: [] } : lieGuess(course, n, p)) });
     rh.nextClub = null; persist(); drawAll(); if (view === "hole") aim();
-    const x = sh.at(-1); undoBar(`Shot ${sh.length - 1} logged · ${x.lie}${x.lieAlt?.length ? "?" : ""}`, before);
+    const x = sh.at(-1); undoBar(`Shot ${strokeNo(sh, sh.length - 1)} logged · ${x.lie}${x.lieAlt?.length ? "?" : ""}`, before);
   }
   // ---- undo right away: a snapshot of the hole before a shot, putts or a score change, and a 6-second "Undo" bar
   const snap = () => JSON.stringify(rh);
@@ -1503,7 +1532,7 @@ async function holeView(ctx) {
     }
     step();
   }
-  const scoreOf = () => { const sh = rh.shots || []; const strokes = Math.max(0, sh.length - 1) || (sh.length ? 1 : 0); return strokes + (rh.putts || 0) + (rh.penalties || 0); };
+  const scoreOf = () => { const sh = rh.shots || []; const strokes = Math.max(0, sh.length - 1) || (sh.length ? 1 : 0); const pn = penOf(rh); return strokes + (rh.putts || 0) + pn.other + pn.ob + pn.pa; };
 
   // ---- GPS (round): live position for yardages
   function startGPS() {
@@ -1674,11 +1703,14 @@ async function holeView(ctx) {
     }
     // round: actual shots + GPS
     if (rh?.shots?.length) {
-      L.polyline(rh.shots.map(x => x.p), { pane: "lines", color: base === "map" ? "#1B1B18" : "#FFFFFF", weight: 2, interactive: false }).addTo(top);
+      const sh = rh.shots, ink = base === "map" ? "#1B1B18" : "#FFFFFF";
+      sh.slice(1).forEach((x, i) => { L.polyline([playFrom(sh, i), x.p], { pane: "lines", color: x.out ? "#C62828" : ink, weight: 2, dashArray: x.out ? "5 5" : null, interactive: false }).addTo(top);
+        if (x.drop) L.circleMarker(x.drop, { radius: 5, color: "#FFFDF7", weight: 2, fillColor: "#C62828", fillOpacity: 1, interactive: false }).addTo(top)
+          .bindTooltip("Drop", { permanent: true, direction: "left", className: "lbl" }); });
       rh.shots.slice(1).forEach((x, i) => {
         const last = i === rh.shots.length - 2 && x.onGreen;      // my ball on the green: drag it into place (GPS is only good to a few yards)
         const mk = L.marker(x.p, { icon: ballIcon, interactive: last, draggable: last, zIndexOffset: last ? 850 : 0 }).addTo(top)
-          .bindTooltip(`${i + 1}${x.lie ? ` · ${x.lie}${x.lieAlt?.length ? "?" : ""}` : ""}`, { permanent: true, direction: "right", className: "lbl" });
+          .bindTooltip(`${strokeNo(sh, i + 1)}${x.lie ? ` · ${x.lie}${x.lieAlt?.length && !x.lieSet ? "?" : ""}` : ""}${x.out === "ob" ? " · OB +1" : x.out === "pa" ? " · +1" : ""}`, { permanent: true, direction: "right", className: "lbl" });
         if (last) mk.on("drag", e => pinLoupe.move(e.target.getLatLng())).on("dragend", e => { pinLoupe.end(); const ll = e.target.getLatLng();
           x.p = [ll.lat, ll.lng]; x.src = "drag"; if (rh.putts) rh.firstPuttFt = firstPuttFt(); persist(); drawAll(false); });
       });
@@ -1780,7 +1812,18 @@ async function holeView(ctx) {
   }
   // the lie of the ball I'm playing from: a guess near an edge ("Rough? Fairway · Fringe"), otherwise the lie, tappable
   function lieHTML() {
-    const b = rh?.shots?.length > 1 ? rh.shots.at(-1) : null; if (!b) return "";
+    const sh = rh?.shots || [], b = sh.length > 1 ? sh.at(-1) : null; if (!b) return "";
+    const i = sh.length - 1, next = strokeNo(sh, i) + (b.out ? 1 : 0) + 1, pi = sh.findIndex(x => x.prov);
+    const btn = (a, t, main) => `<button class="${main ? "liechip" : "liealt"}" data-pen="${a}">${t}</button>`;
+    // a provisional: in play until I find the first ball (then it and its strokes come off)
+    const prov = pi > 0 && pi >= i - 1 ? `<div class="penrow"><span><b>Provisional</b>${pi === i ? ` · +1, hit ${next} from ${pi === 1 ? "the tee" : "your last spot"}` : " in play"}</span>${btn("found", "Found the first ball")}</div>` : "";
+    if (b.out === "ob") return prov || `<div class="penrow"><span><b>Out of bounds</b> · +1, hit ${next} from ${i === 1 ? "the tee" : "your last spot"}</span>${btn("clear", "Not OB")}</div>`;
+    if (b.out === "pa") return `<div class="penrow"><span><b>Penalty area</b> · +1, ${b.drop ? `hit ${next} from the drop (${esc(b.dropLie || "")})` : "tap your drop spot"}</span>${btn("drop", b.drop ? "Move drop" : "Tap drop spot", !b.drop)}${btn("clear", "Not in it")}</div>`;
+    if (b.lie === "Out of bounds" && !b.outNo) return prov + `<div class="penrow"><span><b>Out of bounds?</b></span>${btn("ob", "Stroke and distance +1", true)}${btn("prov", "Provisional ball")}${btn("clear", "In bounds")}</div>`;
+    if (b.lie === "Penalty area" && !b.outNo) return prov + `<div class="penrow"><span><b>Penalty area?</b></span>${btn("pa", "+1 · drop", true)}${btn("clear", "Not in it")}</div>`;
+    return prov + lieRow(b);
+  }
+  function lieRow(b) {
     if (b.lieAlt?.length && !b.lieSet) return `<div class="lierow"><button class="liechip guess" data-lieok="1" title="Tap to confirm">${esc(lieOfShot(b))}?</button>${b.lieAlt.map(l => `<button class="liealt" data-lie="${esc(l)}">${esc(l)}</button>`).join('<span class="muted">·</span>')}</div>`;
     return `<div class="lierow"><span class="seclbl">Lie</span><button class="liechip" data-liepick="1">${esc(lieOfShot(b))}</button></div>`;
   }
@@ -1836,7 +1879,7 @@ async function holeView(ctx) {
       const onTee = !rh.shots?.length, gpsTee = onTeeGPS();
       const fromGPS = !onTee && gpsNear() && !rh.shots.at(-1).onGreen; const from = onTee ? teeToday() : fromGPS ? A.gps.p : ballSpot();
       const label = onTee ? (gpsTee ? `${tee} tee · your spot (GPS ±${Math.round(A.gps.acc)} yd)` : `${tee} tee`)
-        : fromGPS ? `You (GPS ±${Math.round(A.gps.acc)} yd)` : rh.shots?.length > 1 ? "Your ball" : `${tee} tee`;
+        : fromGPS ? `You (GPS ±${Math.round(A.gps.acc)} yd)` : rh.shots?.length > 1 ? ({ ob: rh.shots.length === 2 ? "Replay from the tee" : "Replay from your last spot", pa: rh.shots.at(-1).drop ? "Your drop" : "Your ball" }[rh.shots.at(-1).out] || "Your ball") : `${tee} tee`;
       const P = roundPlan?.holes[n], tg = P ? planKeys.map(k => P[k]?.p) : [];
       // plan on the tee: targets stay where you planned them; distances come from today's tee, and the first club is
       // re-picked from your bag if the new distance calls for a different one
@@ -1880,7 +1923,9 @@ async function holeView(ctx) {
         <div class="scorerow"><span class="seclbl">Score</span><b class="num">${rh.score ?? "–"}</b><span class="muted" style="flex:1">${rh.putts != null ? `${rh.putts} putts${rh.firstPuttFt != null ? ` · first ${rh.firstPuttFt} ft` : ""} <button class="linkbtn" id="redoPutts">Redo</button>` : rh.puttLog?.length ? `${rh.puttLog.length} putt${rh.puttLog.length > 1 ? "s" : ""} so far` : ""}</span>
         <button class="btn small alt" id="sm">−</button><button class="btn small alt" id="sp">+</button></div>`;
       half = sec("This hole", hole) + half;
-      full += `<div class="row"><button class="btn alt small" id="pen">Penalty +1${rh.penalties ? ` (${rh.penalties})` : ""}</button><button class="btn alt small" id="undo">Undo</button></div>` + navBtns("Finish round");
+      const pn = penOf(rh);
+      full += sec(`Penalties${penWords(pn) ? ` · ${penWords(pn)}` : ""}`, `<div class="row"><button class="btn alt small" data-pen="ob">Out of bounds</button><button class="btn alt small" data-pen="prov">Provisional ball</button><button class="btn alt small" data-pen="pa">Penalty area</button></div>
+        <div class="row"><button class="btn alt small" id="pen">Other penalty +1${pn.other ? ` (${pn.other})` : ""}</button><button class="btn alt small" id="undo">Undo last shot</button></div>`) + navBtns("Finish round");
     }
     sh.innerHTML = `<div class="grab" role="button" aria-label="Drag up for more, tap to step up"></div><div class="cmp">${cmp}</div><div class="more">${half}</div><div class="more">${full}<div class="fbrow">${feedbackLink()}</div></div>`;
     // the compact block sets the folded height: everything above the half-height extras, plus the bottom padding
@@ -1924,6 +1969,25 @@ async function holeView(ctx) {
       on("logPutts", askPutts);
       on("redoPutts", () => { delete rh.puttLog; rh.putts = null; rh.firstPuttFt = null; rh.leaveFt = null; rh.score = scoreOf(); persist(); askPutts(); });
       on("pen", () => { const b0 = snap(); rh.penalties = (rh.penalties || 0) + 1; rh.score = scoreOf(); persist(); renderSheet(); undoBar(`Penalty added · score ${rh.score}`, b0); });
+      // out of bounds (stroke and distance), a provisional, a penalty area (then tap the drop), or "it wasn't"
+      sh.querySelectorAll("[data-pen]").forEach(x => x.onclick = () => {
+        const a = x.dataset.pen, s2 = rh.shots || [], i = s2.length - 1, b = s2[i], b0 = snap();
+        if (i < 1) return toast("Log the shot first: tap where it finished.");
+        const clear = o => { delete o.out; delete o.prov; delete o.drop; delete o.dropLie; o.outNo = true;
+          if (["Out of bounds", "Penalty area"].includes(o.lie)) { o.lie = "Rough"; o.lieAlt = []; o.lieSet = false; } };
+        let msg;
+        if (a === "found") { const pi = s2.findIndex(o => o.prov); s2.length = pi + 1; clear(s2[pi]); s2[pi].club = null; rh.nextClub = null; msg = "Provisional picked up · playing the first ball"; }
+        else if (a === "clear") { clear(b); msg = `Shot ${strokeNo(s2, i)} · no penalty`; }
+        else if (a === "drop") { setTap("drop"); setSheet("min"); return; }
+        else if (b.out) return toast("This shot already has a penalty. Use Undo or Not OB / Not in it first.");
+        else if (a === "ob" || a === "prov") { b.out = "ob"; delete b.outNo; if (a === "prov") b.prov = true;
+          rh.nextClub = s2[i - 1].club || rh.nextClub; rh.clubFor = i;      // usually the same club again
+          msg = `${a === "prov" ? "Provisional" : "Out of bounds"} · +1, hit ${strokeNo(s2, i) + 2} from ${i === 1 ? "the tee" : "your last spot"}`; }
+        else if (a === "pa") { b.out = "pa"; delete b.outNo; msg = "Penalty area · +1, now tap your drop spot"; }
+        if (rh.score != null || rh.putts != null) rh.score = scoreOf();
+        persist(); drawAll(false); if (view === "hole") aim(); undoBar(msg, b0);
+        if (a === "pa") { setTap("drop"); setSheet("min"); }
+      });
       on("undo", () => { if (rh.shots?.length > 1) { rh.shots.pop(); if (rh.shots.length === 1) rh.shots = []; rh.score = scoreOf(); persist(); drawAll(false); } });
       on("live", () => { if (A.gpsWatch !== null) { navigator.geolocation.clearWatch(A.gpsWatch); A.gpsWatch = null; A.gps = null; drawAll(false); } else startGPS(); });
       on("sm", () => { const b0 = snap(); rh.score = Math.max(1, (rh.score || h.par) - 1); persist(); renderSheet(); undoBar(`Score ${rh.score}`, b0); });
@@ -1982,6 +2046,7 @@ async function roundSummary(id) {
   const keys = par => par === 3 ? ["approach"] : par === 5 ? ["teeTarget", "layup", "approach"] : ["teeTarget", "approach"];
   const NAME = { teeTarget: "Tee shot", layup: "Layup", approach: "Approach" };
   const inHazard = (p, n) => hazards(course, n).filter(f => f.properties.kind !== "trees" && f.properties.kind !== "ob_line" && f.properties.kind !== "fence" && Geo.inside(p, f.geometry));
+  const pens = { ob: 0, pa: 0, other: 0 };
   let tot = 0, ptot = 0, teeN = 0, teeIn = 0, apN = 0, apGood = 0, found = [], plannedHz = 0; const drift = []; let rows = "";
   const first = [], leave = [];                                  // putting, in feet
   course.holes.forEach(h => {
@@ -1995,21 +2060,22 @@ async function roundSummary(id) {
         const tg = ph[k]; if (!tg?.p) return;
         const idx = k === "approach" ? (() => { const g = sh.findIndex(x => x.onGreen); return (g > 0 ? g : sh.length - 1) - 1; })() : i;
         const shot = sh[idx], fin = sh[idx + 1]; if (!shot || !fin) return;
-        const d = Geo.yd(fin.p, tg.p), m = Geo.miss(shot.p, tg.p, fin.p);
+        const o = playFrom(sh, idx), d = Geo.yd(fin.p, tg.p), m = Geo.miss(o, tg.p, fin.p);
         miss.push(d);
         detail.push(`${NAME[k]}: ${Math.round(d)} yd ${Geo.bearingWords(m)} of target · ${esc(tg.club || "?")} planned, ${shot.club ? esc(shot.club) + " used" : "club not logged"}`);
         if (k === "teeTarget") { teeN++; if (d <= 15) teeIn++; }
         if (k === "approach" && ph.danger && !(h.par === 3 && meta(r.course).teeShots === "shortgame")) {
-          const pin = pinOrCenter(h, rh.pin), mm = Geo.miss(shot.p, pin, fin.p);
+          const pin = pinOrCenter(h, rh.pin), mm = Geo.miss(o, pin, fin.p);
           const bad = { short: mm.along < -3, long: mm.along > 3, left: mm.cross > 3, right: mm.cross < -3 }[ph.danger];
           apN++; if (!bad) apGood++; else detail.push(`<span class="pill red">missed toward danger (${ph.danger})</span>`);
         }
-        plannedHz += targetWarnings(course, h.n, shot.p, tg.p).length;
+        plannedHz += targetWarnings(course, h.n, o, tg.p).length;
       });
     }
-    sh.slice(1).forEach(x => inHazard(x.p, h.n).forEach(f => { found.push(`${h.n}: ${hazardName(f)}`); detail.push(`<span class="pill yellow">ended in ${esc(hazardName(f))}</span>`); }));
+    sh.slice(1).filter(x => !x.out).forEach(x => inHazard(x.p, h.n).forEach(f => { found.push(`${h.n}: ${hazardName(f)}`); detail.push(`<span class="pill yellow">ended in ${esc(hazardName(f))}</span>`); }));
     if (sh.some(x => x.lie)) detail.push(`Lies: ${sh.slice(1).map(x => esc(lieOfShot(x)) + (x.lieAlt?.length && !x.lieSet ? "?" : "")).join(" → ")}`);
-    if (rh.penalties) detail.push(`<span class="pill red">${rh.penalties} penalty</span>`);
+    const pn = penOf(rh); Object.keys(pens).forEach(k => pens[k] += pn[k]);
+    if (penWords(pn)) detail.push(`<span class="pill red">${esc(penWords(pn))}</span>`);
     if (rh.putts != null) detail.push(rh.puttLog?.length ? `${rh.putts} putt${rh.putts === 1 ? "" : "s"}: ${rh.puttLog.map(p => `${p.ft} ft${p.up && p.up !== "level" ? ` ${p.up}` : ""} ${p.made ? "made" : `missed ${p.miss}`}`).join(" · ")}`
       : `${rh.putts} putt${rh.putts === 1 ? "" : "s"}${rh.firstPuttFt != null ? ` · first ${rh.firstPuttFt} ft` : ""}${rh.leaveFt ? ` · left ${rh.leaveFt} ft` : ""}`);
     if (rh.firstPuttFt != null) first.push(rh.firstPuttFt); if (rh.leaveFt != null && rh.putts >= 2) leave.push(rh.leaveFt);
@@ -2023,6 +2089,7 @@ async function roundSummary(id) {
   const card = el(`<div class="card"><h3>${esc(meta(r.course).name)} · ${new Date(r.date).toLocaleDateString()}</h3>
     <div class="muted">${esc(r.tees)} tees${Object.values(r.holes).some(x => x.tee) ? " (some holes played from other tees)" : ""}${plan ? ` · plan: ${esc(plan.name)}` : ""}</div>
     <div class="stat"><div><b>${tot || "–"}</b><span>score${plan ? ` vs ${ptot} planned on the holes played` : ""}</span></div>
+    <div><b>${pens.ob}</b><span>out-of-bounds strokes</span></div><div><b>${pens.pa}</b><span>penalty-area strokes</span></div>${pens.other ? `<div><b>${pens.other}</b><span>other penalty strokes</span></div>` : ""}
     ${first.length ? `<div><b>${Math.round(first.reduce((a, c) => a + c, 0) / first.length)} ft</b><span>average first putt (${first.length} hole${first.length === 1 ? "" : "s"})</span></div>` : ""}
     ${leave.length ? `<div><b>${Math.round(leave.reduce((a, c) => a + c, 0) / leave.length)} ft</b><span>average first-putt leave</span></div>` : ""}
     ${plan ? `<div><b>${pct(teeIn, teeN)}</b><span>tee shots within 15 yd of target (${teeIn}/${teeN})</span></div>

@@ -86,18 +86,19 @@ function holeFacts(course, r, n, plan) {
   if (sh.length < 2 && rh.putts == null) return null;
   const onG = p => Geo.inRing(p, h.green), inBunker = p => polysOf(course, n, ["bunker"]).some(f => Geo.inside(p, f.geometry));
   const gi = sh.findIndex((x, i) => i > 0 && (x.onGreen || onG(x.p)));
-  if (gi > 0) { F.gir = gi <= h.par - 2; if (!F.gir && rh.score != null) F.scramble = rh.score <= h.par; }
+  const penB = j => sh.slice(1, j).filter(x => x.out).length;       // penalty strokes before shot j (OB, penalty area)
+  if (gi > 0) { F.gir = gi + penB(gi) <= h.par - 2; if (!F.gir && rh.score != null) F.scramble = rh.score <= h.par; }
   if (h.par > 3 && sh[1]) {
     F.fw = inFairway(course, n, sh[1].p);
     if (!F.fw) { const line = centerLine(h), tg = Geo.pointAt(line, Geo.along(line, sh[1].p).m); F.teeMiss = Geo.miss(sh[0].p, tg, sh[1].p).cross > 0 ? "left" : "right"; }
   }
   F.wedge = []; F.chips = []; F.bunker = []; F.appr = []; F.sg = null;
   for (let i = 1; i < sh.length; i++) {
-    const from = sh[i - 1].p, fin = sh[i].p, d = Geo.yd(from, pin); if (onG(from)) continue;
+    const from = playFrom(sh, i - 1), fin = sh[i].p, d = Geo.yd(from, pin); if (onG(from)) continue;
     const ft = i === sh.length - 1 && rh.firstPuttFt != null && onG(fin) ? rh.firstPuttFt : Math.round(Geo.m(fin, pin) * FT);
-    const sand = inBunker(from), nearGreen = Geo.distToGeom(from, greenGeom(h)) * YD <= 30, lie = i === 1 ? "Tee" : lieOfShot(sh[i - 1]);
+    const sand = inBunker(from), nearGreen = Geo.distToGeom(from, greenGeom(h)) * YD <= 30, lie = startLie(sh, i - 1);
     // the first short-game shot (within ~30 yd of the green): up and down = holed in 2 from there
-    if (nearGreen && !F.sg) F.sg = { lie, ud: rh.putts != null ? (sh.length - i) + rh.putts <= 2 : null, ft: onG(fin) ? ft : null };
+    if (nearGreen && !F.sg) F.sg = { lie, ud: rh.putts != null ? (sh.length - i) + sh.slice(i).filter(x => x.out).length + rh.putts <= 2 : null, ft: onG(fin) ? ft : null };
     if (!nearGreen && d >= 50 && d <= 250) F.appr.push({ lie, on: onG(fin), ft: onG(fin) ? ft : null });
     if (sand && Geo.distToGeom(from, greenGeom(h)) * YD <= 40) { F.bunker.push({ stayed: inBunker(fin), ft: onG(fin) ? ft : null }); F.sandOpp = true; }
     else if (d >= 40 && d <= 110) F.wedge.push({ ft, along: Geo.miss(from, pin, fin).along });
@@ -105,7 +106,7 @@ function holeFacts(course, r, n, plan) {
   }
   if (F.sandOpp && rh.score != null) F.sandSave = rh.score <= h.par;
   const k = h.par - 2;                                       // the green-in-regulation stroke
-  if (k >= 1 && sh[k] && !onG(sh[k].p) && gi !== k) { const m = Geo.miss(sh[k - 1].p, pin, sh[k].p);
+  if (k >= 1 && sh[k] && !onG(sh[k].p) && gi !== k) { const m = Geo.miss(playFrom(sh, k - 1), pin, sh[k].p);
     F.apMiss = Math.abs(m.along) > Math.abs(m.cross) ? (m.along > 0 ? "long" : "short") : (m.cross > 0 ? "left" : "right"); }
   if (rh.puttLog?.length && rh.putts != null) { F.putts = rh.puttLog; const p0 = rh.puttLog[0]; if (p0.ft >= 20) F.lagLeave = rh.puttLog[1]?.ft ?? 0; }
   if (rh.putts != null) F.three = rh.putts >= 3;
@@ -114,7 +115,7 @@ function holeFacts(course, r, n, plan) {
     ks.forEach((key, i) => { const tg = ph[key]; if (!tg?.p) return;
       const idx = key === "approach" ? (gi > 0 ? gi : sh.length - 1) - 1 : i, shot = sh[idx], fin = sh[idx + 1]; if (!shot || !fin) return;
       F.planNear.push(Geo.yd(fin.p, tg.p) <= 15);
-      if (key === "approach" && ph.danger) { const mm = Geo.miss(shot.p, pin, fin.p);
+      if (key === "approach" && ph.danger) { const mm = Geo.miss(playFrom(sh, idx), pin, fin.p);
         F.dangerMiss = { short: mm.along < -3, long: mm.along > 3, left: mm.cross > 3, right: mm.cross < -3 }[ph.danger]; } });
   }
   return F;

@@ -6,7 +6,7 @@
 <title>Driven Golf</title>
 <!-- script ?v= matches APP_VERSION in js/store.js: bump both on every release so phones never mix old and new files -->
 <!-- home-screen app: "Add to Home Screen" opens full screen as "Driven Golf" -->
-<link rel="manifest" href="manifest.webmanifest?v=0.9.8-beta">
+<link rel="manifest" href="manifest.webmanifest?v=0.9.9-beta">
 <meta name="theme-color" content="#1E3A2B">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -303,8 +303,17 @@
   .hzr .pl { color: var(--muted); font-size: 11px; }
   .hzchips { display: none; }
   .carry { border-left: 3px solid var(--hunter); background: var(--paper); color: var(--hunter); padding: 8px 12px; font: italic 400 14px var(--head); }
-  .hzlbl { transform: translate(-50%, -50%); white-space: nowrap; background: var(--paper); color: var(--ink); border: 1px solid var(--brass); font: italic 500 10.5px var(--head); padding: 1px 6px; pointer-events: none; }
-  .hzlbl.red { color: var(--claret); border-color: var(--claret); }
+  /* hazard yardages on the map, yardage-book style: a tiny tick at the point measured, the number beside it */
+  .ydt { position: absolute; background: var(--ink); pointer-events: none; }
+  .ydt.r { left: 1px; top: -.5px; width: 6px; height: 1px; } .ydt.l { left: -7px; top: -.5px; width: 6px; height: 1px; }
+  .ydt.t { left: -.5px; top: -7px; width: 1px; height: 6px; } .ydt.b { left: -.5px; top: 1px; width: 1px; height: 6px; }
+  .ydt::after { content: ""; position: absolute; width: 3px; height: 3px; border-radius: 9px; background: var(--ink); }
+  .ydt.r::after { left: -2px; top: -1px; } .ydt.l::after { right: -2px; top: -1px; } .ydt.t::after { left: -1px; bottom: -2px; } .ydt.b::after { left: -1px; top: -2px; }
+  .ydl { position: absolute; white-space: nowrap; font: italic 500 11.5px/14px var(--head); color: var(--ink); pointer-events: none;
+    text-shadow: 0 0 2px var(--paper), 0 0 2px var(--paper), 0 0 3px var(--paper), 0 0 4px var(--paper); }
+  .ydl.red { color: var(--claret); }
+  .ydl.ae { color: #FFFDF7; text-shadow: 0 0 2px #1B1B18, 0 0 3px #1B1B18, 0 0 4px #1B1B18; }
+  .hzlist .hl.red b, .hzlist .hl.red span:first-child { color: var(--claret); }
   .today { border-left: 3px solid var(--lake); background: var(--paper); padding: 8px 12px; font: italic 400 14px var(--head); }
   .planrows { display: flex; flex-direction: column; gap: 4px; }
   .planrow { display: flex; gap: 10px; align-items: baseline; font-size: 14px; } .planrow span:first-child { flex: 1; }
@@ -345,9 +354,9 @@
 </head>
 <body>
 <div id="app"></div>
-<script src="js/geo.js?v=0.9.8-beta"></script>
-<script src="js/store.js?v=0.9.8-beta"></script>
-<script src="js/drills.js?v=0.9.8-beta"></script>
-<script src="js/app.js?v=0.9.8-beta"></script>
+<script src="js/geo.js?v=0.9.9-beta"></script>
+<script src="js/store.js?v=0.9.9-beta"></script>
+<script src="js/drills.js?v=0.9.9-beta"></script>
+<script src="js/app.js?v=0.9.9-beta"></script>
 </body>
 </html>

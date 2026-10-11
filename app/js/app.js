@@ -128,8 +128,9 @@ const playsTxt = (slug, yd) => playsLikeOn(slug) ? ` · plays like ~${plays(slug
 const swatch = f => ({ water: f.properties.sub === "lateral" ? "#c62828" : "#3d8bd4", bunker: "#e6cf86", trees: "#2f6b34",
   ob_area: "#ffffff", fence: "#111", ob_line: "#eee", avoid: f.properties.color === "red" ? "#c62828" : "#e0a800" })[f.properties.kind] || "#999";
 // ---- automatic carry yardages: every bunker and hazard near my line (within ~30 yd either side of the line from me to
-// the pin or my next planned target) and within reach (longest club + 20), nearest first. Front / middle / back are
-// straight-line yards from me to the near edge, the center and the far edge of the part of the outline near my line.
+// the pin or my next planned target) and within reach (longest club + 20), nearest first. Reach and carry are
+// straight-line yards from me to where my line enters and leaves the hazard, or, if my line misses it, to its nearest
+// and farthest points near my line. pF / pB are those points (the map labels sit there). A boundary line has reach only.
 const PANEL_SIDE_YD = 30, PANEL_KINDS = ["water", "bunker", "ob_area", "fence", "ob_line", "avoid"];
 function lineSide(line, p) {          // distance (m) from my line and which side: +1 left, -1 right
   const o = line[0], P = Geo.xy(p, o); let best = null;
@@ -152,6 +153,13 @@ function densify(pts, stepM = 2) {
 const panelName = f => { const p = f.properties;
   return p.kind === "avoid" ? (p.name || "Avoid zone") : p.kind === "water" ? (p.sub === "lateral" ? "Lateral water" : "Water")
     : p.kind === "bunker" ? (p.sub === "greenside" ? "Greenside bunker" : "Fairway bunker") : "OB"; };
+// where my line first runs into a hazard area and comes out again (1 m steps, a gap of 3 m ends the stretch)
+function crossPts(line, g) {
+  const total = Geo.length(line); let a = null, b = null;
+  for (let d = 0; d <= total; d += 1) { const p = Geo.pointAt(line, d);
+    if (Geo.inside(p, g)) { if (!a) a = { d, p }; b = { d, p }; } else if (b && d - b.d > 3) break; }
+  return a ? { a: a.p, b: b.p } : null;
+}
 function hazardPanel(course, n, line) {
   const from = line[0], reach = (A.bag.length ? Math.max(...A.bag.map(c => c.total || c.carry || 0)) : 250) + 20, rows = [];   // no bag yet: about 250   // in plays-like yards (altitude)
   hazards(course, n).filter(f => PANEL_KINDS.includes(f.properties.kind)).forEach(f => {
@@ -161,13 +169,13 @@ function hazardPanel(course, n, line) {
     const near = Geo.linesOf(g).flatMap(r => densify(r)).filter(ahead).map(p => ({ p, sd: lineSide(line, p), d: Geo.yd(from, p) }))
       .filter(x => x.sd.d * YD <= PANEL_SIDE_YD);
     if (!near.length) return;
-    const F = poly && Geo.inside(from, g) ? 0 : Math.min(...near.map(x => x.d)), B = Math.max(...near.map(x => x.d));
+    const lo = near.reduce((a, x) => x.d < a.d ? x : a), hi = near.reduce((a, x) => x.d > a.d ? x : a);
+    const cr = poly ? crossPts(line, g) : null, pF = cr ? cr.a : lo.p, pB = cr ? cr.b : hi.p;
+    const F = poly && Geo.inside(from, g) ? 0 : Geo.yd(from, pF), B = Geo.yd(from, pB);
     if (plays(course.slug, F) > reach || B < 5) return;
-    const c = [near.reduce((a, x) => a + x.p[0], 0) / near.length, near.reduce((a, x) => a + x.p[1], 0) / near.length];
-    const M = Math.min(B, Math.max(F, Geo.yd(from, c)));
-    const crosses = Geo.crossings(line, g, 1).length > 0, nl = near.filter(x => x.sd.s > 0).length;
+    const crosses = !!cr || (!poly && Geo.crossings(line, g, 1).length > 0), nl = near.filter(x => x.sd.s > 0).length;
     const side = crosses ? "crossing" : nl >= near.length - nl ? "L" : "R";
-    rows.push({ f, F: Math.round(F), M: Math.round(M), B: Math.round(B), side, c, red: isRed(f) });
+    rows.push({ f, F: Math.round(F), B: Math.round(B), carry: poly ? Math.round(B) : null, pF, pB, side, red: isRed(f) });
   });
   return rows.sort((a, b) => a.F - b.F);
 }
@@ -183,18 +191,13 @@ function carryClub(rows, slug) {
 const chipName = f => { const p = f.properties;
   return p.kind === "avoid" ? (p.name || "Avoid zone") : p.kind === "water" ? (p.sub === "lateral" ? "Lateral water" : "Water")
     : p.kind === "bunker" ? (p.sub === "greenside" ? "Greenside" : "Bunker") : "OB"; };
-function panelHTML(rows, slug, open) {
-  const pl = playsLikeOn(slug), cc = carryClub(rows, slug), sd = r => r.side === "crossing" ? "✕" : r.side;
-  const cls = r => r.f.properties.kind === "bunker" ? "sand" : r.f.properties.kind === "water" && r.f.properties.sub !== "lateral" ? "water" : r.red ? "red" : "";
-  // chips: "Water L · 161 carry" (an OB line or fence is a boundary: yards to reach it instead)
-  const sideW = r => r.side === "crossing" ? "across" : r.side === "L" ? "left" : "right";
-  const list = rows.length ? `<div class="hzlist">${rows.map(r => `<div class="hl"><span>${esc(chipName(r.f))}, ${sideW(r)}</span><span class="lead"></span><b>${r.f.geometry.type.includes("Polygon") ? `${r.B} to carry` : `${r.F} to reach`}</b></div>`).join("")}</div>`
+const hzSide = r => r.side === "crossing" ? "" : ` ${r.side}`;
+const hzYards = r => r.carry == null ? `${r.F} reach` : r.F > 0 ? `${r.F} reach / ${r.carry} carry` : `in it · ${r.carry} carry`;
+function panelHTML(rows, slug) {
+  const pl = playsLikeOn(slug), cc = carryClub(rows, slug);
+  const list = rows.length ? `<div class="hzlist">${rows.map(r => `<div class="hl${r.red ? " red" : ""}"><span>${esc(chipName(r.f))}${hzSide(r)}</span><span class="lead"></span><b>${hzYards(r)}</b></div>${pl ? `<div class="muted" style="font-size:12px;text-align:right">plays ${plays(slug, r.F)}${r.carry != null ? ` / ${plays(slug, r.carry)}` : ""}</div>` : ""}`).join("")}</div>`
     : '<div class="muted it">No hazards in play from here.</div>';
-  const chips = rows.length ? `<div class="hzchips">${rows.map(r => `<span class="hzchip ${cls(r)}">${esc(chipName(r.f))} ${sd(r)} · ${r.f.geometry.type.includes("Polygon") ? `${r.B} carry` : `${r.F} to it`}</span>`).join("")}</div>`
-    : '<div class="muted">No hazards in play from here.</div>';
-  const body = rows.map(r => `<div class="hzr"><span class="sw" style="background:${swatch(r.f)}"></span><span class="nm">${esc(panelName(r.f))} ${r.side} — <b class="num">${r.F} / ${r.M} / ${r.B}</b></span>${pl ? `<span class="pl">plays ${plays(slug, r.F)} / ${plays(slug, r.M)} / ${plays(slug, r.B)}</span>` : ""}</div>`).join("");
-  return { chips: `<div class="hzp"><div class="hzh"><b>Hazards in play</b><span class="muted"></span>${rows.length ? `<button class="linkbtn" id="hzToggle">${open ? "Hide" : "Front · middle · back"}</button>` : ""}</div>
-    ${list}${open && rows.length ? `<div class="hzp">${body}</div>` : ""}</div>`, carry: cc ? `<div class="carry">${esc(cc.txt)}</div>` : "" };
+  return { chips: `<div class="hzp"><div class="hzh"><b>Hazards in play</b><span class="muted">reach / carry</span></div>${list}</div>`, carry: cc ? `<div class="carry">${esc(cc.txt)}</div>` : "" };
 }
 function pinHazardsHTML(course, n, pin) {
   const near = hazards(course, n).filter(f => f.properties.kind !== "trees").map(f => ({ f, d: Geo.distToGeom(pin, f.geometry) * YD })).filter(x => x.d <= 15);
@@ -1266,7 +1269,6 @@ async function holeView(ctx) {
   const hzLayer = L.layerGroup().addTo(map);               // front/middle/back labels on the hazards in play
   const slopeLayer = L.layerGroup().addTo(map);            // green slopes (Green view, "Slopes" toggle)
   let slopes = null; loadSlopes(ctx.slug).then(d => { slopes = d; drawAll(false); });
-  let hzOpen = prefs.hzOpen === true;                      // hazard front/middle/back details start folded
   let sheetMin = 160;                                      // folded sheet height (set from its contents)
   // what the map frames: the green (Green view); in a round, from where I am now to the green; otherwise tee to green
   function framePts() {
@@ -1705,7 +1707,9 @@ async function holeView(ctx) {
         const arc = ll => { const c = ph?.[k]?.byClub && A.bag.find(x => x.name === ph[k].club);
           return c ? toward(planOrigin(k), [ll.lat, ll.lng], reachYd(ctx.slug, clubVal(c, shotUse(k))) / YD) : [ll.lat, ll.lng]; };
         L.marker(P[k].p, { icon: tgtIcon(k === "teeTarget" ? "T" : k === "layup" ? "L" : "A", true, lbl), draggable: ctx.mode === "plan", zIndexOffset: 600 }).addTo(top)
-        .on("drag", e => { if (ph?.[k]?.byClub) e.target.setLatLng(arc(e.target.getLatLng())); })
+        .on("drag", e => { if (ph?.[k]?.byClub) e.target.setLatLng(arc(e.target.getLatLng()));
+          if (ctx.mode !== "plan" || hzLabels.raf) return;            // hazard yardages follow the target as I drag it
+          hzLabels.raf = requestAnimationFrame(() => { hzLabels.raf = 0; const ll = e.target.getLatLng(); ph[k].p = [ll.lat, ll.lng]; hzLabels(hazardPanel(course, n, panelLine())); }); })
         .on("dragend", e => { if (ctx.mode !== "plan") return; ph[k].p = arc(e.target.getLatLng());
           if (!ph[k].clubSet) ph[k].club = pickFor(k, planOrigin(k), ph[k].p)?.name || null; afterPlanChange(k); }); });
     } else if (ctx.mode !== "round" && view !== "green") {
@@ -1777,11 +1781,40 @@ async function holeView(ctx) {
     const P = roundPlan?.holes[n];
     return playLine(h, measureFrom(), getPin(), P ? planKeys.map(k => P[k]?.p) : []);
   }
+  // yardage-book labels on the map, each at the point it measures to with a tiny tick: "238" (reach) and "262 carry".
+  // Carry numbers are placed first; a label that would overlap another (or the buttons) tries the other sides of its
+  // tick, then is left out. Redrawn with GPS, target drags and zoom.
+  let hzLast = [];
   function hzLabels(rows) {
-    hzLayer.clearLayers();
-    rows.forEach(r => L.marker(r.c, { interactive: false, keyboard: false, zIndexOffset: 300, icon: L.divIcon({ className: "", iconSize: [0, 0],   // marker pane: stays upright on the turned map
-      html: `<div class="hzlbl${r.red ? " red" : ""}">${r.F}/${r.M}/${r.B}</div>` }) }).addTo(hzLayer));
+    hzLayer.clearLayers(); hzLast = rows; if (!rows.length || !map._loaded) return;
+    const sz = map.getSize(), placed = [{ x0: sz.x - 66, y0: 0, x1: sz.x, y1: 230 }, { x0: 0, y0: 0, x1: 230, y1: 44 },   // the button stack, the pin label
+      { x0: 0, y0: sz.y - ($("#sheet", s)?.offsetHeight || sheetMin) - 24, x1: sz.x, y1: sz.y }];       // the panel and the map credit
+    const at = p => map.latLngToContainerPoint(p), pn = at(pinOrCenter(h, getPin())), tp = at(teeP);
+    placed.push({ x0: pn.x - 8, y0: pn.y - 40, x1: pn.x + 42, y1: pn.y + 6 }, { x0: tp.x - 12, y0: tp.y - 12, x1: tp.x + 12, y1: tp.y + 12 });   // the flag, the tee
+    if (ctx.mode === "round") (rh.shots || []).slice(1).forEach(x => { const b = at(x.p); placed.push({ x0: b.x - 12, y0: b.y - 12, x1: b.x + 130, y1: b.y + 14 }); });   // balls and their labels
+    const items = [...rows.filter(r => r.carry != null).map(r => ({ r, p: r.pB, txt: `${r.carry} carry` })),
+      ...rows.filter(r => r.F > 0).map(r => ({ r, p: r.pF, txt: `${r.F}` }))];
+    const pts = items.map(it => map.latLngToContainerPoint(it.p));
+    pts.forEach(pt => placed.push({ x0: pt.x - 3, y0: pt.y - 3, x1: pt.x + 3, y1: pt.y + 3 }));       // every tick stays visible
+    const hit = (a, b) => a.x0 < b.x1 + 2 && b.x0 < a.x1 + 2 && a.y0 < b.y1 + 2 && b.y0 < a.y1 + 2;
+    items.forEach((it, k) => {
+      const pt = pts[k], w = Math.round(it.txt.length * 6.2 + 6), hh = 14;
+      if (pt.x < 0 || pt.y < 0 || pt.x > sz.x || pt.y > sz.y) return;
+      // label right of the tick, left, above, below
+      const opts = [[8, -hh / 2, "r"], [-8 - w, -hh / 2, "l"], [-w / 2, -8 - hh, "t"], [-w / 2, 8, "b"]];
+      const own = placed.findIndex(b => b.x0 === pt.x - 3 && b.y0 === pt.y - 3);
+      for (const [dx, dy, d] of opts) {
+        const box = { x0: pt.x + dx, y0: pt.y + dy, x1: pt.x + dx + w, y1: pt.y + dy + hh };
+        if (box.x0 < 2 || box.y0 < 2 || box.x1 > sz.x - 2 || box.y1 > sz.y - 2) continue;
+        if (placed.some((b, bi) => bi !== own && hit(b, box))) continue;
+        placed.push(box);
+        L.marker(it.p, { interactive: false, keyboard: false, zIndexOffset: 300, icon: L.divIcon({ className: "", iconSize: [0, 0],   // marker pane: stays upright on the turned map
+          html: `<i class="ydt ${d}"></i><span class="ydl${it.r.red ? " red" : ""}${base === "aerial" ? " ae" : ""}" style="left:${dx}px;top:${dy}px">${esc(it.txt)}</span>` }) }).addTo(hzLayer);
+        break;
+      }
+    });
   }
+  map.on("zoomend", () => hzLabels(hzLast));
   // the bottom sheet has three heights, dragged between by the handle: "min" (the default: one compact block, the map
   // gets most of the screen), "half" (adds hazards, the club strip, the plan) and "full" (everything). The last height
   // used is remembered; a tap on the map folds it back to min.
@@ -1818,8 +1851,8 @@ async function holeView(ctx) {
   // one short hazard line for the compact sheet: the first hazard in play, "+2" for the rest
   function hzLineHTML(rows) {
     if (!rows.length) return `<span class="hzline muted">No hazards</span>`;
-    const r = rows[0], what = r.f.geometry.type.includes("Polygon") ? `${r.B} carry` : `${r.F} to reach`;
-    return `<span class="hzline${r.red ? " red" : ""}">${esc(chipName(r.f))} ${what}${rows.length > 1 ? ` · +${rows.length - 1}` : ""}</span>`;
+    const r = rows[0], what = r.carry != null ? `${r.carry} carry` : `${r.F} reach`;
+    return `<span class="hzline${r.red ? " red" : ""}">${esc(chipName(r.f))}${hzSide(r)} ${what}${rows.length > 1 ? ` · +${rows.length - 1}` : ""}</span>`;
   }
   // the lie of the ball I'm playing from: a guess near an edge ("Rough? Fairway · Fringe"), otherwise the lie, tappable
   function lieHTML() {
@@ -1844,7 +1877,7 @@ async function holeView(ctx) {
     // ball on the green: putting in feet, so the yardage hazard panel and its labels step aside
     const greenMode = ctx.mode === "round" && rh.shots?.length && Geo.inRing(measureFrom(), h.green);
     const hzRows = greenMode ? [] : hazardPanel(course, n, panelLine()); hzLabels(view === "green" ? [] : hzRows);
-    const hp = greenMode ? null : panelHTML(hzRows, ctx.slug, hzOpen);
+    const hp = greenMode ? null : panelHTML(hzRows, ctx.slug);
     const hzLine = greenMode || view === "green" ? "" : hzLineHTML(hzRows);
     const hzHalf = hp ? hp.chips + hp.carry : "";
     const fullNotes = (view === "green" ? "" : slopeHTML()) + (greenMode ? "" : pinHazardsHTML(course, n, pin));
@@ -1952,7 +1985,6 @@ async function holeView(ctx) {
       const md = modal(`<h3 style="margin:0">Lie for shot ${rh.shots.length}</h3><div class="chips">${LIES.map(l => `<button class="chip${l === rh.shots.at(-1).lie ? " on" : ""}" data-l="${esc(l)}">${esc(l)}</button>`).join("")}</div>`);
       md.querySelectorAll("[data-l]").forEach(c => c.onclick = () => { md.remove(); setLie(c.dataset.l); }); });
     const on = (id, f) => { const x = $("#" + id, sh); if (x) x.onclick = f; };
-    on("hzToggle", () => { hzOpen = !hzOpen; prefs.hzOpen = hzOpen; Store.set("viewPrefs", prefs); renderSheet(); });
     const setHide = v => { const all = Store.get("slopeHide:" + ctx.slug, {}); all[n] = v; Store.set("slopeHide:" + ctx.slug, all); drawAll(false); };
     on("slopeHide", () => setHide(true)); on("slopeShow", () => setHide(false));
     on("slopeTog", () => { prefs.slopes = !slopesOn(); Store.set("viewPrefs", prefs); drawAll(false); });

@@ -58,6 +58,29 @@ function usgaYd(h, p) {
 const pinOrCenter = (h, pin) => pin || h.greenCenter;
 const FT = 3.28084;
 const ftTo = (a, b) => Math.round(Geo.m(a, b) * FT);   // feet, nearest foot (on the green)
+
+// ---------------------------------------------------------------- putting stats (rounds + practice green)
+// a putt: {ft, made, miss: short|long|left|right|null, up: uphill|downhill|level|null, brk: left-to-right|right-to-left|straight|null, pct}
+const puttSlopeWords = p => !p.up ? "" : `${p.up[0].toUpperCase() + p.up.slice(1)}, ${p.brk === "straight" ? "straight" : `breaks ${p.brk}`}${p.pct != null ? ` · ${Math.max(1, Math.round(p.pct))}% slope` : ""}`;
+const PUTT_BUCKETS = [[0, 3], [3, 6], [6, 10], [10, 20]];
+// putting sequences saved by the practice pages: [{id, t, green, putts:[...]}] under driven-practice:<page>:putts
+function practicePutts() {
+  const out = [];
+  try { Object.keys(localStorage).filter(k => k.startsWith("driven-practice:") && k.endsWith(":putts"))
+    .forEach(k => JSON.parse(localStorage.getItem(k) || "[]").forEach(sq => out.push(sq))); } catch {}
+  return out.sort((a, b) => b.t - a.t);
+}
+// seqs: one array of putts per hole (or per practice try), in order. Make % by distance, lag putts from over 30 ft that
+// finish inside 3 ft (or go in), and three-putts among the holed-out sequences
+function puttStats(seqs) {
+  const all = seqs.flatMap(sq => sq.map((p, i) => ({ ...p, next: sq[i + 1]?.ft ?? (p.made ? 0 : null) })));
+  const buckets = PUTT_BUCKETS.map(([a, b]) => { const xs = all.filter(p => (a === 0 || p.ft > a) && p.ft <= b);
+    return { label: `${a}–${b} ft`, n: xs.length, made: xs.filter(p => p.made).length }; });
+  const lag = all.filter(p => p.ft > 30 && p.next != null), done = seqs.filter(sq => sq.length && sq.at(-1).made);
+  return { n: all.length, buckets, lagN: lag.length, lagIn: lag.filter(p => p.next <= 3).length, holes: done.length, three: done.filter(sq => sq.length >= 3).length };
+}
+const roundPuttSeqs = holes => holes.filter(h => h.puttLog?.length && h.putts != null).map(h => h.puttLog);
+const pctOf = (a, b) => b ? Math.round(100 * a / b) : null;
 // line of play from a spot to the pin: through planned targets still ahead; with no plan, the USGA way (the same rule
 // that set the scorecard markers): straight to the pin, bending only at the hole's pivot when it's ahead of you, well
 // short of the pin, and the hole really bends there (more than ~10 yd off the straight line)
@@ -285,6 +308,13 @@ function focusPick() {
     if (short > shots.length * 0.6) out.push({ w: 25, stat: `${short}/${shots.length}`, statLabel: "finished short", title: "Get chips to the hole", detail: `${short} of ${shots.length} practice chips finished short.` });
   }
   const holes = Store.rounds().flatMap(r => Object.values(r.holes));
+  // putting, from rounds and the practice green together
+  const ps = puttStats([...roundPuttSeqs(holes), ...practicePutts().slice(0, 60).map(sq => sq.putts)]);
+  const counted = holes.filter(h => h.putts != null), three = counted.filter(h => h.putts >= 3).length, tp = pctOf(three, counted.length);
+  if (counted.length >= 9 && tp >= 12) out.push({ w: tp, stat: `${tp}%`, statLabel: "three-putts", title: "Cut out three-putts", detail: `${three} of your last ${counted.length} holes had three putts or more. Work on lag putting and the 3–6 footers.` });
+  if (ps.lagN >= 5) { const lp = pctOf(ps.lagIn, ps.lagN); if (lp < 60) out.push({ w: (65 - lp) / 1.5, stat: `${lp}%`, statLabel: "lags inside 3 ft", title: "Lag putting from 30+ ft", detail: `${ps.lagIn} of ${ps.lagN} putts from over 30 ft finished inside 3 ft. Practice long putts to a 3-ft circle.` }); }
+  [[1, 75, "Make the 3–6 footers"], [0, 92, "Hole the short ones"], [2, 45, "Putts from 6–10 ft"]].forEach(([i, goal, title]) => { const b = ps.buckets[i]; if (b.n < 8) return;
+    const mp = pctOf(b.made, b.n); if (mp < goal) out.push({ w: (goal - mp) / 1.5, stat: `${mp}%`, statLabel: `made ${b.label}`, title, detail: `You made ${b.made} of ${b.n} putts from ${b.label}. A good target is ${goal}%.` }); });
   const lv = holes.filter(h => h.leaveFt != null && h.putts >= 2).map(h => h.leaveFt);
   if (lv.length >= 5) { const a = lv.reduce((x, y) => x + y, 0) / lv.length; if (a > 4) out.push({ w: 10 * (a - 4), stat: `${Math.round(a)} ft`, statLabel: "average leave", title: "Lag putting", detail: `Your first putts leave ${Math.round(a)} ft on average. Get them inside 3 ft.` }); }
   const pp = holes.filter(h => h.putts != null).map(h => h.putts);
@@ -429,6 +459,16 @@ async function statsPage() {
     <div><b>${avg(fp) != null ? Math.round(avg(fp)) + " ft" : "–"}</b><span>average first putt</span></div>
     <div><b>${avg(lv) != null ? Math.round(avg(lv)) + " ft" : "–"}</b><span>first-putt leave</span></div>
     <div><b>${in6 != null ? in6 + "%" : "–"}</b><span>practice chips inside 6 ft</span></div></div></div>`));
+  // putting: rounds (this filter) beside the practice green
+  const rs = puttStats(roundPuttSeqs(holes)), pr = puttStats(practicePutts().map(sq => sq.putts));
+  const counted = holes.filter(h => h.putts != null), three = counted.filter(h => h.putts >= 3).length;
+  const cell = (a, n2) => n2 ? `${pctOf(a, n2)}% <small class="muted">${a}/${n2}</small>` : "–";
+  b.appendChild(el(`<h2>Putting</h2>`));
+  b.appendChild(el(`<div class="card"><div class="tablewrap"><table class="t"><tr><th></th><th>Rounds</th><th>Practice</th></tr>
+    <tr><td>Three-putts</td><td>${cell(three, counted.length)}</td><td>${cell(pr.three, pr.holes)}</td></tr>
+    ${rs.buckets.map((x, i) => `<tr><td>Made from ${x.label}</td><td>${cell(x.made, x.n)}</td><td>${cell(pr.buckets[i].made, pr.buckets[i].n)}</td></tr>`).join("")}
+    <tr><td>Lags from 30+ ft inside 3 ft</td><td>${cell(rs.lagIn, rs.lagN)}</td><td>${cell(pr.lagIn, pr.lagN)}</td></tr></table></div>
+    <p class="muted">Log each putt with Log putts on the green, or on a practice page's putting green. Lag = a putt from over 30 ft that goes in or finishes within 3 ft.</p></div>`));
   b.appendChild(el(`<h2>Rounds</h2>`));
   const rl = el(`<div class="card list"></div>`);
   if (!rounds.length) rl.appendChild(el(`<p>No rounds here yet. Pick a course on Play, then Start a round.</p>`));
@@ -1175,20 +1215,79 @@ async function holeView(ctx) {
     sh.push({ p, club: null, src, onGreen });
     rh.nextClub = null; persist(); drawAll(); if (view === "hole") aim();
   }
-  // putting is in feet: first putt = my ball on the green to the pin; leave = where the first putt finished
+  // ---- putting, one putt at a time: the first putt's length is my ball on the green to the pin; after a miss, the
+  // next one is a quick tap (1–10+ ft). Uphill/downhill and break come from the green's slope map along each putt.
+  // Saved per hole as puttLog [{ft, made, miss, up, brk, pct, src}], plus putts / firstPuttFt / leaveFt as before.
   const firstPuttFt = () => { const b = rh.shots?.at(-1); return b?.onGreen ? ftTo(b.p, pinOrCenter(h, getPin())) : null; };
-  function askPutts() {
-    const fp = firstPuttFt();
-    const md = modal(`<h3 style="margin:0">Putts on hole ${n}</h3>${fp != null ? `<p class="muted">First putt: <b>${fp} ft</b></p>` : ""}<div class="chips" id="pc"></div>`);
-    [0, 1, 2, 3, 4].forEach(k => { const c = el(`<button class="chip">${k}</button>`); c.onclick = () => {
-      rh.putts = k; rh.firstPuttFt = k ? fp : null; rh.leaveFt = k === 1 ? 0 : null; rh.score = scoreOf(); persist(); md.remove(); drawAll();
-      if (k >= 2) askLeave(); }; $("#pc", md).appendChild(c); });
+  // the slope along a putt's line: averaged from the slope map's arrows near the line
+  function slopeAlong(from, to) {
+    const sh = slopeHole(), len = Geo.m(from, to); if (!sh || len < 0.3) return null;
+    const N = Math.max(2, Math.ceil(len / 0.5)); let gx = 0, gy = 0, k = 0;
+    for (let i = 0; i <= N; i++) {
+      const p = [from[0] + (to[0] - from[0]) * i / N, from[1] + (to[1] - from[1]) * i / N];
+      let best = null; sh.arrows.forEach(a => { const d = Geo.m(p, a); if (!best || d < best.d) best = { d, a }; });
+      if (!best || best.d > 1.5) continue;
+      const r = best.a[2] * Math.PI / 180; gx += best.a[3] * Math.sin(r); gy += best.a[3] * Math.cos(r); k++;
+    }
+    if (!k) return null;
+    const d = Geo.xy(to, from), ux = d[0] / len, uy = d[1] / len; gx /= k; gy /= k;
+    const along = gx * ux + gy * uy, cross = ux * gy - uy * gx;     // + along: falls toward the hole; + cross: falls to my left
+    return { up: along > 0.75 ? "downhill" : along < -0.75 ? "uphill" : "level", brk: cross > 0.75 ? "right-to-left" : cross < -0.75 ? "left-to-right" : "straight",
+      pct: Math.round(Math.hypot(gx, gy) * 10) / 10 };
   }
-  function askLeave() {
-    const md = modal(`<h3 style="margin:0">Where did your first putt finish?</h3><p class="muted">Feet from the hole</p><div class="chips" id="lc"></div><button class="btn alt" id="sk">Skip</button>`);
-    [1, 2, 3, 4, 5, 6, 8, 10, 15, 20].forEach(ft => { const c = el(`<button class="chip">${ft}${ft === 20 ? "+" : ""} ft</button>`);
-      c.onclick = () => { rh.leaveFt = ft; persist(); md.remove(); drawAll(false); }; $("#lc", md).appendChild(c); });
-    $("#sk", md).onclick = () => md.remove();
+  // where putt i was hit from: my ball for the first; after that, estimated from the miss before (short = back down my
+  // line, long = past the hole, left/right = beside it) at the distance I tapped
+  function puttSpot(log, i) {
+    const pin = pinOrCenter(h, getPin()), ball = rh.shots?.at(-1)?.onGreen ? rh.shots.at(-1).p : null;
+    if (i === 0) return ball;
+    const prev = log[i - 1], from = puttSpot(log, i - 1) || approachFrom(); if (!prev?.miss || !log[i]) return null;
+    const d = Geo.xy(pin, from), l0 = Math.hypot(d[0], d[1]) || 1, ux = d[0] / l0, uy = d[1] / l0, m = log[i].ft / FT;
+    const dir = { short: [-ux, -uy], long: [ux, uy], left: [-uy, ux], right: [uy, -ux] }[prev.miss];
+    return Geo.ll([dir[0] * m, dir[1] * m], pin);
+  }
+  function askPutts() {
+    const log = rh.puttLog = (rh.puttLog || []).filter(p => p.made != null);
+    const md = modal(`<div class="pflow" id="pf"></div>`), box = $("#pf", md);
+    let cur = null;
+    const finish = () => { rh.putts = log.length; rh.firstPuttFt = log[0]?.ft ?? null; rh.leaveFt = log.length >= 2 ? log[1].ft : log.length ? 0 : null;
+      rh.score = scoreOf(); persist(); md.remove(); drawAll(); };
+    const distChips = (fts, more) => fts.map(f => `<button class="chip" data-ft="${f}">${f}</button>`).join("") + (more ? '<button class="chip" data-more="1">10+</button>' : "");
+    function askDist(i, long = false) {
+      box.innerHTML = `<h3 style="margin:0">Putt ${i + 1}: how far?</h3><p class="muted">Feet from the hole${i ? "" : ". Place your ball on the green and the first putt is measured for you."}</p>
+        <div class="chips">${long || !i ? distChips([10, 12, 15, 20, 25, 30, 40, 50, 60], false) : distChips([1, 2, 3, 4, 5, 6, 7, 8, 9], true)}</div>
+        ${!i ? `<div class="chips">${distChips([1, 2, 3, 4, 5, 6, 7, 8, 9], false)}</div>` : ""}
+        <div class="row">${i ? '<button class="linkbtn" id="pu">Undo last putt</button>' : ""}</div>`;
+      box.querySelectorAll("[data-ft]").forEach(b => b.onclick = () => { cur = { ft: +b.dataset.ft, src: "tap" }; step(); });
+      const more = $("[data-more]", box); if (more) more.onclick = () => askDist(i, true);
+      const pu = $("#pu", box); if (pu) pu.onclick = () => { log.pop(); persist(); step(); };
+    }
+    function step() {
+      const i = log.length;
+      if (!cur && i === 0 && firstPuttFt() != null) cur = { ft: firstPuttFt(), src: "ball" };
+      if (!cur) return askDist(i);
+      const spot = puttSpot([...log, cur], i), sl = spot ? slopeAlong(spot, pinOrCenter(h, getPin())) : null;
+      Object.assign(cur, { up: sl?.up || null, brk: sl?.brk || null, pct: sl?.pct ?? null });
+      box.innerHTML = `<h3 style="margin:0">Putt ${i + 1} · ${cur.ft} ft</h3>
+        <p class="muted">${cur.src === "ball" ? "Your ball to the pin. " : ""}${sl ? esc(puttSlopeWords(cur)) : slopes?.holes?.[n] ? "No slope reading on this line." : "No slope map for this green."}</p>
+        <button class="btn" data-r="made">Made it</button>
+        <div class="seclbl">Missed</div><div class="row">${["short", "long", "left", "right"].map(m => `<button class="btn alt small" data-r="${m}">${m}</button>`).join("")}</div>
+        <div class="row" style="gap:16px">${i ? '<button class="linkbtn" id="pu">Undo last putt</button>' : '<button class="linkbtn" id="pc">Just count putts</button><button class="linkbtn" id="p0">Holed from off the green</button>'}
+          ${cur.src === "tap" ? '<button class="linkbtn" id="pd">Change distance</button>' : ""}</div>`;
+      box.querySelectorAll("[data-r]").forEach(b => b.onclick = () => { const r = b.dataset.r;
+        log.push({ ...cur, made: r === "made", miss: r === "made" ? null : r }); cur = null; persist();
+        if (r === "made") finish(); else step(); });
+      const on2 = (id, f) => { const x = $("#" + id, box); if (x) x.onclick = f; };
+      on2("pu", () => { log.pop(); cur = null; persist(); step(); });
+      on2("pd", () => { cur = null; askDist(i); });
+      on2("p0", () => { log.length = 0; finish(); });
+      on2("pc", () => {                                  // the quick way: just the number of putts
+        const fp = firstPuttFt();
+        box.innerHTML = `<h3 style="margin:0">Putts on hole ${n}</h3>${fp != null ? `<p class="muted">First putt: <b>${fp} ft</b></p>` : ""}<div class="chips">${[0, 1, 2, 3, 4].map(k => `<button class="chip" data-k="${k}">${k}</button>`).join("")}</div>`;
+        box.querySelectorAll("[data-k]").forEach(c => c.onclick = () => { const k = +c.dataset.k; delete rh.puttLog;
+          rh.putts = k; rh.firstPuttFt = k ? fp : null; rh.leaveFt = k === 1 ? 0 : null; rh.score = scoreOf(); persist(); md.remove(); drawAll(); });
+      });
+    }
+    step();
   }
   const scoreOf = () => { const sh = rh.shots || []; const strokes = Math.max(0, sh.length - 1) || (sh.length ? 1 : 0); return strokes + (rh.putts || 0) + (rh.penalties || 0); };
 
@@ -1552,7 +1651,7 @@ async function holeView(ctx) {
       full += fullNotes + (P?.note ? sec("Hole note", `<div class="it">“${esc(P.note)}”</div>`) : "");
       full += `<div class="row">${putts ? '<button class="btn alt small" id="atBall">I\'m at my ball</button>' : ""}<button class="btn alt small" id="tapBall">Tap ball</button><button class="btn alt small" id="onGreen">On green</button></div>
         <div class="row"><button class="btn alt small" id="pen">Penalty +1${rh.penalties ? ` (${rh.penalties})` : ""}</button><button class="btn alt small" id="undo">Undo</button><button class="btn alt small" id="live">${A.gpsWatch !== null ? "Live GPS on" : "Live GPS"}</button></div>
-        <div class="scorerow"><span class="seclbl">Score</span><b class="num">${rh.score ?? "–"}</b><span class="muted" style="flex:1">${rh.putts != null ? `${rh.putts} putts${rh.firstPuttFt != null ? ` · first ${rh.firstPuttFt} ft${rh.leaveFt ? `, left ${rh.leaveFt} ft` : ""}` : ""}` : ""}</span>
+        <div class="scorerow"><span class="seclbl">Score</span><b class="num">${rh.score ?? "–"}</b><span class="muted" style="flex:1">${rh.putts != null ? `${rh.putts} putts${rh.firstPuttFt != null ? ` · first ${rh.firstPuttFt} ft` : ""} <button class="linkbtn" id="redoPutts">Redo</button>` : rh.puttLog?.length ? `${rh.puttLog.length} putt${rh.puttLog.length > 1 ? "s" : ""} so far` : ""}</span>
         <button class="btn small alt" id="sm">−</button><button class="btn small alt" id="sp">+</button></div>` + navBtns("Finish round");
     }
     sh.innerHTML = `<div class="grab" role="button" aria-label="Drag up for more, tap to step up"></div><div class="cmp">${cmp}</div><div class="more">${half}</div><div class="more">${full}<div class="fbrow">${feedbackLink()}</div></div>`;
@@ -1588,6 +1687,7 @@ async function holeView(ctx) {
         else setTap("green");
       });
       on("logPutts", askPutts);
+      on("redoPutts", () => { delete rh.puttLog; rh.putts = null; rh.firstPuttFt = null; rh.leaveFt = null; rh.score = scoreOf(); persist(); askPutts(); });
       on("pen", () => { rh.penalties = (rh.penalties || 0) + 1; rh.score = scoreOf(); persist(); renderSheet(); });
       on("undo", () => { if (rh.shots?.length > 1) { rh.shots.pop(); if (rh.shots.length === 1) rh.shots = []; rh.score = scoreOf(); persist(); drawAll(false); } });
       on("live", () => { if (A.gpsWatch !== null) { navigator.geolocation.clearWatch(A.gpsWatch); A.gpsWatch = null; A.gps = null; drawAll(false); } else startGPS(); });
@@ -1672,7 +1772,8 @@ async function roundSummary(id) {
     }
     sh.slice(1).forEach(x => inHazard(x.p, h.n).forEach(f => { found.push(`${h.n}: ${hazardName(f)}`); detail.push(`<span class="pill yellow">ended in ${esc(hazardName(f))}</span>`); }));
     if (rh.penalties) detail.push(`<span class="pill red">${rh.penalties} penalty</span>`);
-    if (rh.putts != null) detail.push(`${rh.putts} putt${rh.putts === 1 ? "" : "s"}${rh.firstPuttFt != null ? ` · first ${rh.firstPuttFt} ft` : ""}${rh.leaveFt ? ` · left ${rh.leaveFt} ft` : ""}`);
+    if (rh.putts != null) detail.push(rh.puttLog?.length ? `${rh.putts} putt${rh.putts === 1 ? "" : "s"}: ${rh.puttLog.map(p => `${p.ft} ft${p.up && p.up !== "level" ? ` ${p.up}` : ""} ${p.made ? "made" : `missed ${p.miss}`}`).join(" · ")}`
+      : `${rh.putts} putt${rh.putts === 1 ? "" : "s"}${rh.firstPuttFt != null ? ` · first ${rh.firstPuttFt} ft` : ""}${rh.leaveFt ? ` · left ${rh.leaveFt} ft` : ""}`);
     if (rh.firstPuttFt != null) first.push(rh.firstPuttFt); if (rh.leaveFt != null && rh.putts >= 2) leave.push(rh.leaveFt);
     const pinMovedVsPlan = plan && ((ph.pin && !rh.pin) || (!ph.pin && rh.pin) || (ph.pin && rh.pin && Geo.yd(ph.pin, rh.pin) > 1));
     if (pinMovedVsPlan) detail.push(`<span class="pill blue">pin moved from plan</span>`);

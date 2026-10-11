@@ -116,6 +116,15 @@
   #result b { font: 300 48px/1 var(--head); }
   #result .miss { font: italic 400 17px var(--head); color: var(--flag); }
   .panel { background: var(--chalk); border-top: 3px double var(--brass); border-radius: 0; padding-top: 14px; gap: 10px; }
+  /* putting: one putt at a time, the same steps as Log putts in a round */
+  #puttSheet { position: fixed; inset: 0; z-index: 3000; background: #1B1B1873; display: flex; align-items: flex-end; }
+  #puttSheet .pflow { background: var(--chalk); width: 100%; border-top: 3px double var(--brass); padding: 18px 16px calc(env(safe-area-inset-bottom, 0px) + 16px);
+                      display: flex; flex-direction: column; gap: 10px; }
+  #puttSheet h3 { margin: 0; font: 300 24px var(--head); } #puttSheet p { margin: 0; color: var(--muted); font-size: 14px; }
+  #puttSheet .lbl { font: 600 10.5px "Jost", system-ui; letter-spacing: .2em; text-transform: uppercase; color: var(--muted); }
+  #puttSheet .chips { display: flex; gap: 6px; flex-wrap: wrap; } #puttSheet .chips .small { flex: 0 0 auto; min-width: 48px; padding: 0 12px; }
+  #puttSheet .row .small { flex: 1; text-transform: uppercase; letter-spacing: .14em; }
+  #puttSheet .link { all: unset; cursor: pointer; color: var(--flag); font: 500 13px "Jost", system-ui; text-decoration: underline; text-underline-offset: 3px; }
   .readout b { font: 300 42px/1 var(--head); }
   .readout span { font-style: italic; font-family: var(--head); }
   .big { border-radius: 0; min-height: 52px; font: 600 12.5px "Jost", system-ui; letter-spacing: .2em; text-transform: uppercase; background: var(--turf); color: var(--chalk); border: 1px solid var(--brass); }
@@ -152,6 +161,7 @@
   <div class="row">
     <button class="big" id="gpsBtn">I'm at my ball</button>
     <button class="big alt" id="finishBtn" disabled>Mark finish</button>
+    <button class="big" id="puttBtn" hidden>Log putts</button>
   </div>
   <div class="row">
     <button class="small" id="addBtn">Add hole</button>
@@ -161,6 +171,7 @@
   </div>
   <div id="msg" hidden></div>
 </div>
+<div id="puttSheet" hidden><div class="pflow" id="pf"></div></div>
 <div id="logSheet" hidden>
   <div class="sheet">
     <header><h1>Shot log</h1><button class="small" id="logClose" style="flex:0 0 auto;padding:8px 14px">Done</button></header>
@@ -186,6 +197,7 @@ let pins = load(":pins", []);             // [{id, lat, lng}]
 let selectedId = load(":sel", null);
 let ball = load(":ball", null);           // {lat, lng, src, acc}
 let log = load(":log", []);
+let putts = load(":putts", []);           // putting tries: [{id, t, green, hole, putts:[{ft, made, miss}]}] (read by the app's stats)
 let base = load(":base", "map");
 let view = "shot";
 let mode = "ball";                        // what a tap does: ball | add | move | finish
@@ -445,12 +457,49 @@ function refresh() {
   const sp = selPin();
   $("moveBtn").disabled = !sp; $("removeBtn").disabled = !sp;
   $("finishBtn").disabled = !(sp && ball) && mode !== "finish";
-  $("logBtn").textContent = log.length ? `Log (${log.length})` : "Log";
+  $("logBtn").textContent = log.length + putts.length ? `Log (${log.length + putts.length})` : "Log";
+  // ball on a green with a hole picked: putting instead of a chip
+  const onGreen = !!(ball && sp && greens.some(g => inRing(ball, g.ring)));
+  $("puttBtn").hidden = !onGreen; $("finishBtn").hidden = onGreen;
   $("hintText").textContent = HINTS[mode]();
   $("hintCancel").hidden = mode === "ball";
   readout();
 }
 function flash(t) { const m = $("msg"); m.textContent = t; m.hidden = !t; clearTimeout(flash.t); if (t) flash.t = setTimeout(() => m.hidden = true, 4000); }
+
+// ---------- putting: one putt at a time (the first from the ball to the hole, then quick taps 1–10+ ft) ----------
+$("puttBtn").onclick = () => {
+  const sp = selPin(); if (!sp || !ball) return;
+  const seq = [], box = $("pf"), sheet = $("puttSheet"); let cur = { ft: Math.max(1, Math.round(dist(ball, sp) * M_TO_FT)), src: "ball" };
+  const close = () => { sheet.hidden = true; };
+  sheet.onclick = e => { if (e.target === sheet) close(); };
+  const chips = fts => fts.map(f => `<button class="small" data-ft="${f}">${f}</button>`).join("");
+  function askDist(long) {
+    box.innerHTML = `<h3>Putt ${seq.length + 1}: how far?</h3><p>Feet from the hole</p>
+      <div class="chips">${long ? chips([10, 12, 15, 20, 25, 30, 40]) : chips([1, 2, 3, 4, 5, 6, 7, 8, 9]) + '<button class="small" data-more="1">10+</button>'}</div>
+      <div class="row"><button class="link" id="pu">Undo last putt</button></div>`;
+    box.querySelectorAll("[data-ft]").forEach(b => b.onclick = () => { cur = { ft: +b.dataset.ft, src: "tap" }; step(); });
+    const m = box.querySelector("[data-more]"); if (m) m.onclick = () => askDist(true);
+    $("pu").onclick = () => { seq.pop(); cur = seq.length ? null : { ft: Math.max(1, Math.round(dist(ball, sp) * M_TO_FT)), src: "ball" }; step(); };
+  }
+  function step() {
+    if (!cur) return askDist(false);
+    const i = seq.length;
+    box.innerHTML = `<h3>Putt ${i + 1} · ${cur.ft} ft</h3><p>${cur.src === "ball" ? `Your ball to hole ${pinNo(sp)}.` : ""}</p>
+      <button class="big" data-r="made">Made it</button><div class="lbl">Missed</div>
+      <div class="row">${["short", "long", "left", "right"].map(m => `<button class="small" data-r="${m}">${m}</button>`).join("")}</div>
+      <div class="row">${i ? '<button class="link" id="pu">Undo last putt</button>' : '<button class="link" id="pc">Cancel</button>'}</div>`;
+    box.querySelectorAll("[data-r]").forEach(b => b.onclick = () => {
+      const r = b.dataset.r; seq.push({ ft: cur.ft, made: r === "made", miss: r === "made" ? null : r }); cur = null;
+      if (r !== "made") return step();
+      putts.push({ id: Date.now().toString(36), t: Date.now(), green: greenAt(sp).label, hole: pinNo(sp), putts: seq.slice() }); save(":putts", putts);
+      close(); refresh(); flash(`${seq.length} putt${seq.length > 1 ? "s" : ""} from ${seq[0].ft} ft. Saved.`);
+    });
+    const pu = $("pu"); if (pu) pu.onclick = () => { seq.pop(); cur = seq.length ? null : { ft: Math.max(1, Math.round(dist(ball, sp) * M_TO_FT)), src: "ball" }; step(); };
+    const pc = $("pc"); if (pc) pc.onclick = close;
+  }
+  sheet.hidden = false; step();
+};
 
 // ---------- GPS: "I'm at my ball" ----------
 $("gpsBtn").onclick = () => {
@@ -568,7 +617,25 @@ $("logClose").onclick = () => { $("logSheet").hidden = true; };
 $("logSheet").onclick = e => { if (e.target.id === "logSheet") $("logSheet").hidden = true; };
 function renderLog() {
   const list = $("logList"); list.innerHTML = "";
-  if (!log.length) { list.innerHTML = '<div class="empty">No shots yet. Place your ball, pick a hole, hit, then Mark finish.</div>'; $("logStats").textContent = ""; return; }
+  if (putts.length) {
+    const all = putts.flatMap(sq => sq.putts), b = [[0, 3], [3, 6], [6, 10], [10, 20]].map(([a, z]) => { const xs = all.filter(p => (a === 0 || p.ft > a) && p.ft <= z); return xs.length ? `${a}–${z} ft ${xs.filter(p => p.made).length}/${xs.length}` : ""; }).filter(Boolean);
+    const head = document.createElement("div"); head.className = "stats";
+    head.textContent = `Putting: ${putts.length} tr${putts.length > 1 ? "ies" : "y"} · ${putts.filter(sq => sq.putts.length >= 3).length} three-putts · made ${b.join(" · ")}`;
+    list.appendChild(head);
+    [...putts].reverse().forEach(sq => {
+      const row = document.createElement("div"); row.className = "entry";
+      const time = new Date(sq.t).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+      row.innerHTML = `<div class="what"><span class="ft">${sq.putts.length} putt${sq.putts.length > 1 ? "s" : ""}</span> · ${sq.putts.map(p => `${p.ft} ft ${p.made ? "made" : p.miss}`).join(", ")}
+        <small>${time} · hole ${sq.hole}, ${sq.green}</small></div>`;
+      const del = document.createElement("button"); del.textContent = "Delete";
+      del.onclick = () => {
+        if (!del.classList.contains("sure")) { del.classList.add("sure"); del.textContent = "Sure?"; setTimeout(() => { del.classList.remove("sure"); del.textContent = "Delete"; }, 3000); return; }
+        putts = putts.filter(x => x.id !== sq.id); save(":putts", putts); renderLog(); refresh();
+      };
+      row.appendChild(del); list.appendChild(row);
+    });
+  }
+  if (!log.length) { if (!putts.length) list.innerHTML = '<div class="empty">No shots yet. Place your ball, pick a hole, hit, then Mark finish. On a green: Log putts.</div>'; $("logStats").textContent = ""; return; }
   const avg = log.reduce((s, x) => s + x.ft, 0) / log.length;
   const inSix = log.filter(x => x.ft <= 6).length;
   $("logStats").textContent = `${log.length} shots · average ${fmtFt(avg)} left · ${inSix} inside 6 ft`;

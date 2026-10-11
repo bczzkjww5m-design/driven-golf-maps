@@ -133,7 +133,9 @@ function hazardPanel(course, n, line) {
   const from = line[0], reach = Math.max(...A.bag.map(c => c.total || c.carry)) + 20, rows = [];   // in plays-like yards (altitude)
   hazards(course, n).filter(f => PANEL_KINDS.includes(f.properties.kind)).forEach(f => {
     const g = f.geometry, poly = g.type.includes("Polygon");
-    const near = Geo.linesOf(g).flatMap(r => densify(r)).map(p => ({ p, sd: lineSide(line, p), d: Geo.yd(from, p) }))
+    const dir = Geo.xy(line[1], from);                     // which way I'm hitting: parts behind me aren't in play
+    const ahead = p => { const v = Geo.xy(p, from); return v[0] * dir[0] + v[1] * dir[1] > -3 * Math.hypot(...dir); };
+    const near = Geo.linesOf(g).flatMap(r => densify(r)).filter(ahead).map(p => ({ p, sd: lineSide(line, p), d: Geo.yd(from, p) }))
       .filter(x => x.sd.d * YD <= PANEL_SIDE_YD);
     if (!near.length) return;
     const F = poly && Geo.inside(from, g) ? 0 : Math.min(...near.map(x => x.d)), B = Math.max(...near.map(x => x.d));
@@ -699,26 +701,48 @@ async function holeView(ctx) {
   // ---- plan helpers
   const planKeys = h.par === 3 ? ["approach"] : h.par === 5 ? ["teeTarget", "layup", "approach"] : ["teeTarget", "approach"];
   const KEYNAME = { teeTarget: "Tee shot", layup: "Layup", approach: h.par === 3 ? (m.teeShots === "shortgame" ? "Tee shot (short game)" : "Tee shot (approach)") : "Approach" };
-  // club for a planned shot: total yards for the tee shot (tee clubs on par 4/5) and layups; carry for approaches and
-  // whenever the line has to carry a bunker (fairway or greenside), a red hazard or an avoid zone. Plays-like yards.
+  // club for a planned shot: total yards for the tee shot (tee clubs on par 4/5) and layups, carry for approaches.
+  // If the line crosses a bunker, red hazard or avoid zone, only clubs whose carry clears its far edge by 5+ yards
+  // count; of those, the one whose total (carry if the target is on the green) is closest to the target.
   function pickFor(k, from, p) {
-    const yd = plays(ctx.slug, Geo.yd(from, p));
-    const overHz = hazards(course, n).some(f => {
+    const dist = Geo.yd(from, p), yd = plays(ctx.slug, dist), teeOnly = k === "teeTarget" && h.par > 3;
+    let hz = null;                                   // the crossed hazard with the farthest far edge short of the target
+    hazards(course, n).forEach(f => {
       const kd = f.properties.kind;
-      if (!(kd === "bunker" || kd === "avoid" || isRed(f)) || !f.geometry.type.includes("Polygon")) return false;
+      if (!(kd === "bunker" || kd === "avoid" || isRed(f)) || !f.geometry.type.includes("Polygon")) return;
       const rc = Geo.reachCarry([from, p], f.geometry, 1);
-      return rc && rc.carry < Geo.yd(from, p) - 3;          // the ball has to fly over it to get to the target
+      if (rc && rc.carry < dist - 3 && (!hz || rc.carry > hz.carry)) hz = { f, ...rc };
     });
-    return clubPick(yd, k === "approach" || overHz ? "carry" : "total", k === "teeTarget" && h.par > 3);
+    if (!hz) return clubPick(yd, k === "approach" ? "carry" : "total", teeOnly);
+    let bag = A.bag.filter(c => c.carry > 0); if (teeOnly && bag.some(c => c.tee)) bag = bag.filter(c => c.tee);
+    bag = bag.slice().sort((a, b) => b.carry - a.carry);
+    const need = Math.round(plays(ctx.slug, hz.carry) + 5), name = panelName(hz.f).toLowerCase();
+    const info = { name, need, edge: Math.round(hz.carry), front: Math.round(hz.reach), longest: bag[0] };
+    const clears = bag.filter(c => c.carry >= need);
+    if (!clears.length) return { ...clubPick(yd, "carry", teeOnly), hz: { ...info, clears: false } };
+    const use = Geo.inRing(p, h.green) ? "carry" : "total";
+    const best = clears.reduce((a, c) => Math.abs(clubVal(c, use) - yd) < Math.abs(clubVal(a, use) - yd) ? c : a);
+    const i = bag.indexOf(best);
+    return { club: best, name: best.name, use, yards: Math.round(yd), up: bag[i - 1] || null, down: bag[i + 1] || null, between: null, noReach: false,
+      longest: bag[0], hz: { ...info, clears: true, past: Math.round(clubVal(best, use) - yd) } };
   }
   function clubPickHTML(k, from, t) {
     const pk = pickFor(k, from, t.p), cur = A.bag.find(c => c.name === t.club) || pk?.club;
     if (!cur) return "";
     const order = A.bag.slice().sort((a, b) => b.carry - a.carry), i = order.findIndex(c => c.name === cur.name);
-    const up = order[i - 1], dn = order[i + 1], note = pickNote(pk);
+    const up = order[i - 1], dn = order[i + 1], hz = pk?.hz;
+    let note = pickNote(pk), line = clubLine(cur);
+    if (hz) {   // the line has to carry a hazard: show what it takes and what this club does
+      const tot = cur.total || cur.carry, use = pk.use;
+      line = `${cur.name} · ${cur.carry >= hz.need ? "carries" : "doesn't carry"} ${hz.name} (${hz.need} needed, ${cur.carry} carry) · ${use === "carry" ? `${cur.carry} carry` : `${tot} total`} to ${pk.yards} target`;
+      const past = (use === "carry" ? cur.carry : tot) - pk.yards;
+      note = !hz.clears ? `No club carries the ${hz.name} (${hz.need} needed; your longest carry is ${hz.longest.name} ${hz.longest.carry}). Lay up short of it: keep this shot under ${hz.front} yards.`
+        : cur.carry < hz.need ? `${cur.name} doesn't clear the ${hz.name} (${hz.need} needed). ${pk.name} does.`
+        : past > 10 ? `${cur.name} clears the ${hz.name} but finishes ${past} past your target. Move the target or lay up short of the ${hz.name}.` : "";
+    }
     return `<div class="clubpick"><button class="btn small alt" ${up ? `data-pickclub="${k}|${esc(up.name)}"` : "disabled"}>▲ ${up ? esc(up.name) : ""}</button>
-      <b>${esc(clubLine(cur))}</b><button class="btn small alt" ${dn ? `data-pickclub="${k}|${esc(dn.name)}"` : "disabled"}>▼ ${dn ? esc(dn.name) : ""}</button></div>
-      <div class="muted" style="font-size:12px">Picked by ${pk?.use === "total" ? "total" : "carry"} yards${t.clubSet ? ` · you chose ${esc(t.club)} <button class="linkbtn" data-autoclub="${k}">use the suggestion (${esc(pk?.name || "")})</button>` : ""}</div>
+      <b>${esc(line)}</b><button class="btn small alt" ${dn ? `data-pickclub="${k}|${esc(dn.name)}"` : "disabled"}>▼ ${dn ? esc(dn.name) : ""}</button></div>
+      <div class="muted" style="font-size:12px">${pk?.hz ? `Has to carry the ${esc(pk.hz.name)}: its far edge is ${pk.hz.edge} yards away. ` : ""}Picked by ${pk?.use === "total" ? "total" : "carry"} yards${t.clubSet ? ` · you chose ${esc(t.club)} <button class="linkbtn" data-autoclub="${k}">use the suggestion (${esc(pk?.name || "")})</button>` : ""}</div>
       ${note ? `<div class="warn">${esc(note)}</div>` : ""}`;
   }
   function planOrigin(k) {

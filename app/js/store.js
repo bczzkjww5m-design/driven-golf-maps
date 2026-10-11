@@ -60,7 +60,7 @@ try { Object.keys(localStorage).filter(k => k.startsWith("dg:teeFix:")).forEach(
 // ---------------------------------------------------------------- versions, safe updates, backups
 // APP_VERSION: shown in the profile, the export file and feedback emails. DATA_VERSION: the saved-data format.
 // Updates never delete saved data: migrate() only adds/converts, and keeps the old keys.
-const APP_VERSION = "0.9.7-beta";
+const APP_VERSION = "0.9.8-beta";
 const DATA_VERSION = 2;
 Store.migrate = function () {
   try {

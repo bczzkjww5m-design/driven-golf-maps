@@ -1238,21 +1238,18 @@ async function holeView(ctx) {
     <div class="mapwrap"><div id="map"></div>
       <div class="fl rcol">
         <button class="rbtn" id="bAerial" data-b="aerial" aria-label="Aerial view" title="Aerial">${IC.aerial}</button>
-        <button class="rbtn" id="bGreen" data-v="green" aria-label="Green view" title="Green view">${IC.green}</button>
-        <button class="rbtn" id="pinBtn" aria-label="Move pin" title="Move pin">${IC.pin}</button>
+        <button class="rbtn" id="pinBtn" aria-label="Green view: see the green and move the pin" title="Green view">${IC.pin}</button>
         <button class="rbtn" id="reset" aria-label="Center on me" title="Center on me">${IC.me}</button>
-        <button class="rbtn" id="slopesBtn" aria-label="Slopes" title="Slopes" hidden>${IC.slope}</button>
       </div>
       <div class="fl pinlabel" id="pinLabel" style="left:12px;top:12px"></div>
       <div class="fl slopecap" id="slopeCap" hidden></div>
-      <div class="fl presets" id="presets" hidden></div>
       <div class="fl undobar" id="undoBar" hidden></div>
       <div class="fl hint" id="hint" hidden><span id="hintText"></span><button id="hintDone">Done</button></div>
       <span id="ydHead" hidden></span>
     </div>
     <div class="sheet" id="sheet"></div></div>`);
   app.appendChild(s);
-  $(".back", s).onclick = () => ctx.mode === "plan" ? planSummary(plan.id) : ctx.mode === "round" ? roundSummary(round.id) : coursePage(ctx.slug);
+  $(".back", s).onclick = () => view === "green" ? ($("#pinBtn", s).onclick()) : ctx.mode === "plan" ? planSummary(plan.id) : ctx.mode === "round" ? roundSummary(round.id) : coursePage(ctx.slug);
   $("#prev", s).onclick = () => holeView({ ...ctx, n: n > 1 ? n - 1 : NH });
   $("#next", s).onclick = () => holeView({ ...ctx, n: n < NH ? n + 1 : 1 });
   $("#teeBtn", s).onclick = () => {
@@ -1287,7 +1284,7 @@ async function holeView(ctx) {
     map.invalidateSize({ animate: false });
     if (!map._loaded) map.setView(h.greenCenter, 17, { animate: false });
     const sz = map.getSize(), green = view === "green";
-    const topPad = 10, below = sheetMin + 10 + (green && tapMode === "pin" ? 150 : 0), side = green ? 22 : 14;
+    const topPad = 10, below = sheetMin + 10, side = green ? 22 : 14;
     // computed, not measured: project the points, turn them by the map's bearing, fit and center them (screen reads can
     // be stale right after a tap or a turn)
     const pts = framePts(), th = (map.getBearing ? map.getBearing() : 0) * Math.PI / 180, cs = Math.cos(th), sn = Math.sin(th);
@@ -1302,38 +1299,35 @@ async function holeView(ctx) {
   const setBase = b => { base = b; prefs.base = b; Store.set("viewPrefs", prefs);
     s.querySelectorAll("[data-b]").forEach(x => x.classList.toggle("on", x.dataset.b === b));
     if (b === "aerial") aerial.addTo(map); else aerial.remove(); drawAll(); };
-  const setView = v => { view = v; s.querySelectorAll("[data-v]").forEach(x => x.classList.toggle("on", x.dataset.v === v)); drawAll(); frame(); };   // draw (sheet height) first, then frame
+  const setView = v => { view = v; $("#pinBtn", s).classList.toggle("on", v === "green"); drawAll(); aim(); };   // draw (sheet height) first, then frame
   s.querySelectorAll("[data-b]").forEach(x => x.onclick = () => setBase(x.dataset.b));
-  s.querySelectorAll("[data-v]").forEach(x => x.onclick = () => setView(x.dataset.v));
   $("#bAerial", s).onclick = () => setBase(base === "aerial" ? "map" : "aerial");   // round buttons toggle
-  $("#bGreen", s).onclick = () => setView(view === "green" ? "hole" : "green");
   // center on me: my GPS spot if I have a fresh fix, otherwise the whole hole (or green) again
   $("#reset", s).onclick = () => { if (A.gps && Date.now() - A.gps.t < 30000) map.setView(A.gps.p, Math.max(map.getZoom(), 18)); else frame(); };
-  $("#pinBtn", s).onclick = () => tapMode === "pin" ? $("#hintDone", s).onclick() : setTap("pin");
-  $("#slopesBtn", s).onclick = () => { prefs.slopes = !prefs.slopes; Store.set("viewPrefs", prefs); drawAll(false); };
+  // one flag button: Green view, where the pin is always movable (drag the flag, tap the green, or a preset). The flag
+  // button again, or the back arrow, returns to the hole; the pin stays where I put it.
+  $("#pinBtn", s).onclick = () => { if (tapMode === "green") setTap(null); setView(view === "green" ? "hole" : "green"); };
   const loupeBase = () => L.imageOverlay(h.aerial.img, h.aerial.bounds);
-  const wasHold = attachHold(map, loupeBase, ll => onTap(ll), () => !!tapMode);
+  const wasHold = attachHold(map, loupeBase, ll => tapMode ? onTap(ll) : (setPin(onGreen(ll)), drawAll(false)), () => !!tapMode || view === "green");
   const pinLoupe = dragLoupe(map, loupeBase);
-  map.on("click", e => { if (wasHold()) return; if (!tapMode) return setSheet("min"); onTap([e.latlng.lat, e.latlng.lng]); });   // a plain tap on the map folds the sheet
+  map.on("click", e => { if (wasHold()) return; const p = [e.latlng.lat, e.latlng.lng];
+    if (!tapMode && view === "green" && Geo.distToGeom(p, greenGeom(h)) * YD <= 2) { setPin(onGreen(p)); drawAll(false); return; }   // Green view: tap the green to place the pin
+    if (!tapMode) return setSheet("min"); onTap(p); });   // otherwise a plain tap on the map folds the sheet
 
   // ---- what a tap does
-  const HINTS = { pin: "Drag the flag, tap the green, or pick a preset. Press and hold to magnify.",
-    teeTarget: "Tap where you want your tee shot to finish.", layup: "Tap your layup target.", approach: "Tap your approach target.",
+  const HINTS = { teeTarget: "Tap where you want your tee shot to finish.", layup: "Tap your layup target.", approach: "Tap your approach target.",
     ball: "Tap where your ball is. Press and hold to magnify.", green: "Tap where your ball finished on the green.",
     drop: "Tap where you dropped: within 2 club-lengths of where it crossed into the penalty area, or back on the line.",
     trace: "Tap around the area to outline it, then press Done." };
   function setTap(mode) {
     tapMode = mode;
     $("#hint", s).hidden = !mode; $("#hintText", s).textContent = mode ? HINTS[mode] : "";
-    $("#presets", s).hidden = mode !== "pin"; $("#pinBtn", s).classList.toggle("on", mode === "pin");
-    if (mode === "pin" || mode === "green") setView("green");
+    if (mode === "green") setView("green");
     else drawAll();
-    if (mode === "pin") drawPresets();
   }
   $("#hintDone", s).onclick = () => { if (tapMode === "trace") finishTrace(); else { setTap(null); if (view === "green") setView("hole"); } };
   function onTap(p) {
     if (!tapMode) return;
-    if (tapMode === "pin") { setPin(onGreen(p)); drawAll(); return; }
     if (["teeTarget", "layup", "approach"].includes(tapMode)) {
       const k = tapMode; const from = planOrigin(k); const yd = Geo.yd(from, p);
       ph[k] = { p, club: pickFor(k, from, p)?.name || null, clubSet: false, byClub: false };   // dropped by hand: the club is picked for me
@@ -1360,17 +1354,21 @@ async function holeView(ctx) {
   }
   function approachFrom() {
     const P = ph || (roundPlan ? roundPlan.holes[n] : null);
-    const line = playLine(h, measureFrom(), null, P ? planKeys.map(k => P[k]?.p) : []);
+    const mf = measureFrom(), from = Geo.yd(mf, h.greenCenter) > 40 ? mf : teeP;   // on or near the green: the hole's own way in
+    const line = playLine(h, from, null, P ? planKeys.map(k => P[k]?.p) : []);
     let i = line.length - 2; while (i > 0 && Geo.yd(line[i], h.greenCenter) < 30) i--;
     return line[i];
   }
-  function drawPresets() {
-    const box = $("#presets", s); box.innerHTML = "";
-    const pre = Geo.pinPresets(h.green, approachFrom(), h.greenCenter);   // laid out along my line into the green
-    ["Back Left", "Back Center", "Back Right", "Middle Left", "Middle Center", "Middle Right", "Front Left", "Front Center", "Front Right"].forEach(k => {
-      const b = el(`<button>${k.replace("Middle Center", "Center").replace("Middle ", "Mid ")}</button>`);
-      b.onclick = () => { setPin(k === "Middle Center" ? null : pre[k]); drawAll(); }; box.appendChild(b);
-    });
+  // pin presets: a small 3x3 grid in the panel, laid out like the green as I see it (back row on top, left to right
+  // along my line in), the current spot highlighted. Nothing goes on the green itself.
+  const PRESETS = ["Back Left", "Back Center", "Back Right", "Middle Left", "Middle Center", "Middle Right", "Front Left", "Front Center", "Front Right"];
+  const presetSpots = () => Geo.pinPresets(h.green, approachFrom(), h.greenCenter);
+  function presetGridHTML() {
+    const pre = presetSpots(), cur = getPin();
+    const on = k => k === "Middle Center" ? !cur : !!(cur && pre[k] && Geo.m(cur, pre[k]) < 2);
+    return `<div class="pgrid"><div class="pgl"><span class="seclbl">Pin</span><small>Back</small><span></span></div>
+      <div class="pgd">${PRESETS.map(k => `<button class="pdot${on(k) ? " on" : ""}" data-preset="${k}" aria-label="Pin ${k === "Middle Center" ? "center" : k.toLowerCase()}" title="${k === "Middle Center" ? "Center" : k}"></button>`).join("")}</div>
+      <small class="pgf">Front</small></div>`;
   }
 
   // ---- plan helpers
@@ -1431,7 +1429,8 @@ async function holeView(ctx) {
   // I've hit, it turns from where I am now to the green, so the shot ahead fills the screen.
   function aim() {
     const from = ctx.mode === "round" && rh.shots?.length ? measureFrom() : teeP;
-    A.holeBearing = bearingTo(Geo.yd(from, h.greenCenter) > 40 ? from : teeP, h.greenCenter);
+    // Green view: turned along my way into the green, so its back is at the top (like the pin preset grid)
+    A.holeBearing = view === "green" ? bearingTo(approachFrom(), h.greenCenter) : bearingTo(Geo.yd(from, h.greenCenter) > 40 ? from : teeP, h.greenCenter);
     if (map.setBearing) map.setBearing(-A.holeBearing * (A.bearingSign || 1));
     frame();
   }
@@ -1639,33 +1638,44 @@ async function holeView(ctx) {
     const [, , down, pct] = best.a;
     return pct < 0.75 ? "Pin on a flat spot (under 1%)." : `Pin on a ${slopeWords(down)} slope, about ${Math.max(1, Math.round(pct))}%.`;
   }
+  const slopesOn = () => prefs.slopes !== false;           // on unless I turned them off
   function drawSlopes() {
     slopeLayer.clearLayers();
-    const btn = $("#slopesBtn", s); btn.hidden = view !== "green" || !slopes?.holes?.[n]; btn.classList.toggle("on", !!prefs.slopes);
     // the pin's slope, as a small caption on the map (Green view only)
     const cap = $("#slopeCap", s), read = view === "green" ? pinSlope() : null; cap.hidden = !read; cap.textContent = read || "";
-    const sh = slopeHole(); if (!sh || view !== "green" || !prefs.slopes) return;
+    const sh = slopeHole(); if (!sh || view !== "green" || !slopesOn()) return;
     L.imageOverlay("data/" + sh.img, sh.bounds, { pane: "fills", interactive: false }).addTo(slopeLayer);
-    sh.contours.forEach(c => L.polyline(c, { pane: "hz", color: base === "map" ? "#1E3A2B" : "#FFFDF7", weight: 0.6, opacity: 0.28, interactive: false }).addTo(slopeLayer));
-    const R = Math.PI / 180, at = (o, b2, m) => Geo.ll([Math.sin(b2 * R) * m, Math.cos(b2 * R) * m], o);
-    sh.arrows.filter(a => a[3] >= 0.75).forEach(([la, lo, down]) => {      // small arrows pointing downhill
-      const o = [la, lo], tip = at(o, down, 0.8), tail = at(o, down + 180, 0.8);
-      L.polyline([tail, tip], { pane: "hz", color: "#1E3A2B", weight: 1.2, opacity: 0.55, interactive: false }).addTo(slopeLayer);
-      L.polyline([at(tip, down + 150, 0.45), tip, at(tip, down - 150, 0.45)], { pane: "hz", color: "#1E3A2B", weight: 1.2, opacity: 0.55, interactive: false }).addTo(slopeLayer);
-    });
-    sh.steep.forEach(z => {
-      L.polygon(z.ring, { pane: "hz", color: "#7A1F2B", weight: 1.2, opacity: 0.8, dashArray: "3 4", fill: false, interactive: false }).addTo(slopeLayer);
-      const c = [z.ring.reduce((a, q) => a + q[0], 0) / z.ring.length, z.ring.reduce((a, q) => a + q[1], 0) / z.ring.length];
-      L.marker(c, { interactive: false, keyboard: false, icon: L.divIcon({ className: "", iconSize: [0, 0], html: `<div class="slopelbl">${esc(z.label)}</div>` }) }).addTo(slopeLayer);
-    });
+    slopeArrows(sh);
   }
+  // downhill arrows on an even grid: about every 5 ft (Santa Fe's coarser lidar: about 6.5 ft), every 2.5-3 ft zoomed
+  // in, sparser zoomed out. Longer and darker = steeper; under 0.5 % has no arrow. A clear circle around the pin and my ball.
+  function slopeArrows(sh) {
+    const g = sh.grid; if (!g) return;
+    const z = map.getZoom(), mpp = 40075016.686 * Math.cos(h.greenCenter[0] * Math.PI / 180) / Math.pow(2, z + 8);
+    const step = g.step_ft / 3.28084, k = [1, 2, 4, 8, 16].find(m => step * m / mpp >= 11) || 16, sp = step * k;
+    const clear = [pinOrCenter(h, getPin())]; if (ctx.mode === "round" && Geo.inRing(measureFrom(), h.green)) clear.push(measureFrom());
+    const R = Math.PI / 180, at = (o, b2, m) => Geo.ll([Math.sin(b2 * R) * m, Math.cos(b2 * R) * m], o);
+    const buckets = [[], [], [], []];                         // by steepness: up to 1 %, 2 %, 3 %, steeper
+    g.pts.forEach(([i, j, down, t10]) => {
+      if (i % k || j % k) return;
+      const o = [g.lat0 + j * g.dlat, g.lng0 + i * g.dlng], pct = t10 / 10;
+      if (clear.some(c => Geo.m(c, o) < 1.1)) return;
+      const f = Math.min(pct, 4) / 4, len = sp * (0.28 + 0.34 * f), tip = at(o, down, len / 2), tail = at(o, down + 180, len / 2), hd = Math.max(len * 0.32, sp * 0.12);
+      buckets[Math.min(3, Math.floor(pct))].push([tail, tip], [at(tip, down + 150, hd), tip, at(tip, down - 150, hd)]);
+    });
+    const ink = base === "map" ? "#1E3A2B" : "#FFFDF7";
+    buckets.forEach((paths, b2) => { if (paths.length) L.polyline(paths, { pane: "hz", color: ink, weight: 1, opacity: [0.32, 0.5, 0.68, 0.88][b2], interactive: false }).addTo(slopeLayer); });
+  }
+  map.on("zoomend", () => { if (view === "green") drawSlopes(); });
   function slopeHTML() {
     if (!slopes?.holes?.[n]) return "";
     if (slopeHidden()) return `<div class="muted">${slopes.holes[n].suspect && Store.get("slopeHide:" + ctx.slug, {})[n] === undefined ? `Slopes hidden: ${esc(slopes.holes[n].suspect)}` : "Slopes hidden for this green."}
       <button class="linkbtn" id="slopeShow">Show anyway</button></div>`;
-    const note = view === "green" && prefs.slopes ? `<div class="muted" style="font-size:12px">Estimated from public lidar (${esc(slopes.year)}). Greens can change; trust what you see. ${esc(slopes.credit)}.
-      <button class="linkbtn" id="slopeHide">Hide slopes for this green</button></div>` : "";
-    return note ? `<div class="slope">${note}</div>` : "";
+    const sh = slopes.holes[n], steep = sh.steep?.length ? `<div>Steep spots: ${sh.steep.map(z => esc(z.label)).join(", ")}.</div>` : "";
+    if (view === "green") return `<div class="slope"><div class="row" style="align-items:center"><span style="flex:1">Slope shading and arrows</span><button class="chip${slopesOn() ? " on" : ""}" id="slopeTog">${slopesOn() ? "On" : "Off"}</button></div>${slopesOn() ? steep : ""}
+      ${slopesOn() ? `<div class="muted" style="font-size:12px">Arrows point downhill; longer and darker is steeper. Estimated from public lidar (${esc(slopes.year)}). Greens can change; trust what you see. ${esc(slopes.credit)}.
+      <button class="linkbtn" id="slopeHide">Hide slopes for this green</button></div>` : ""}</div>`;
+    return "";
   }
 
   // ---- draw everything
@@ -1677,16 +1687,16 @@ async function holeView(ctx) {
     const ballOnGreen = ctx.mode === "round" && rh.shots?.length && Geo.inRing(measureFrom(), h.green);
     $("#pinLabel", s).textContent = ballOnGreen ? `Pin: ${ftTo(measureFrom(), pin)} ft` : pinMoved() ? "Pin: moved" : "Pin: center (default)";
     L.marker(teeP, { icon: teeIcon, interactive: false, keyboard: false }).addTo(top);   // marker pane: placed and drawn upright on the turned map
-    const pm = L.marker(pin, { icon: pinIcon(pinMoved()), draggable: tapMode === "pin", zIndexOffset: 800 }).addTo(top);
+    const pm = L.marker(pin, { icon: pinIcon(pinMoved()), draggable: view === "green", zIndexOffset: 800 }).addTo(top);
     pm.on("drag", e => pinLoupe.move(e.target.getLatLng()));
     pm.on("dragend", e => { pinLoupe.end(); const ll = e.target.getLatLng(); setPin(onGreen([ll.lat, ll.lng])); drawAll(false); });
-    pm.on("click", () => { if (ctx.mode !== "round" || true) setTap(tapMode === "pin" ? null : "pin"); });
+    pm.on("click", () => { if (view !== "green") setView("green"); });
     const LC = base === "map" ? "#1E3A2B" : "#FFFDF7";      // lines: hunter on the drawn map, light on the aerial
     if (view === "green") [3, 6, 10].forEach(ft => L.circle(pin, { radius: ft / 3.28084, color: LC, weight: 1, opacity: .6, fill: false, interactive: false, pane: "lines" }).addTo(top));
     // planned targets + planned line
     const P = ph || (roundPlan ? roundPlan.holes[n] : null);
     const planned = P ? planKeys.map(k => P[k]?.p).filter(Boolean) : [];
-    if (planned.length) {
+    if (planned.length && view !== "green") {
       L.polyline([teeToday(), ...planned, pin], { pane: "lines", color: LC, weight: 1.6, dashArray: "6 6", interactive: false }).addTo(top);
       planKeys.forEach((k, ki) => { if (!P[k]?.p) return;
         let o = teeToday(); for (let j = ki - 1; j >= 0; j--) if (P[planKeys[j]]?.p) { o = P[planKeys[j]].p; break; }
@@ -1698,19 +1708,20 @@ async function holeView(ctx) {
         .on("drag", e => { if (ph?.[k]?.byClub) e.target.setLatLng(arc(e.target.getLatLng())); })
         .on("dragend", e => { if (ctx.mode !== "plan") return; ph[k].p = arc(e.target.getLatLng());
           if (!ph[k].clubSet) ph[k].club = pickFor(k, planOrigin(k), ph[k].p)?.name || null; afterPlanChange(k); }); });
-    } else if (ctx.mode !== "round") {
+    } else if (ctx.mode !== "round" && view !== "green") {
       L.polyline(playLine(h, teeP, getPin()), { pane: "lines", color: LC, weight: 1.6, dashArray: "6 6", opacity: .9, interactive: false }).addTo(top);
     }
     // round: actual shots + GPS
     if (rh?.shots?.length) {
       const sh = rh.shots, ink = base === "map" ? "#1B1B18" : "#FFFFFF";
-      sh.slice(1).forEach((x, i) => { L.polyline([playFrom(sh, i), x.p], { pane: "lines", color: x.out ? "#C62828" : ink, weight: 2, dashArray: x.out ? "5 5" : null, interactive: false }).addTo(top);
+      if (view !== "green") sh.slice(1).forEach((x, i) => { L.polyline([playFrom(sh, i), x.p], { pane: "lines", color: x.out ? "#C62828" : ink, weight: 2, dashArray: x.out ? "5 5" : null, interactive: false }).addTo(top);
         if (x.drop) L.circleMarker(x.drop, { radius: 5, color: "#FFFDF7", weight: 2, fillColor: "#C62828", fillOpacity: 1, interactive: false }).addTo(top)
           .bindTooltip("Drop", { permanent: true, direction: "left", className: "lbl" }); });
       rh.shots.slice(1).forEach((x, i) => {
         const last = i === rh.shots.length - 2 && x.onGreen;      // my ball on the green: drag it into place (GPS is only good to a few yards)
-        const mk = L.marker(x.p, { icon: ballIcon, interactive: last, draggable: last, zIndexOffset: last ? 850 : 0 }).addTo(top)
-          .bindTooltip(`${strokeNo(sh, i + 1)}${x.lie ? ` · ${x.lie}${x.lieAlt?.length && !x.lieSet ? "?" : ""}` : ""}${x.out === "ob" ? " · OB +1" : x.out === "pa" ? " · +1" : ""}`, { permanent: true, direction: "right", className: "lbl" });
+        if (view === "green" && !Geo.inRing(x.p, h.green) && i < rh.shots.length - 2) return;   // earlier balls stay off the green view
+        const mk = L.marker(x.p, { icon: ballIcon, interactive: last, draggable: last, zIndexOffset: last ? 850 : 0 }).addTo(top);
+        if (view !== "green") mk.bindTooltip(`${strokeNo(sh, i + 1)}${x.lie ? ` · ${x.lie}${x.lieAlt?.length && !x.lieSet ? "?" : ""}` : ""}${x.out === "ob" ? " · OB +1" : x.out === "pa" ? " · +1" : ""}`, { permanent: true, direction: "right", className: "lbl" });
         if (last) mk.on("drag", e => pinLoupe.move(e.target.getLatLng())).on("dragend", e => { pinLoupe.end(); const ll = e.target.getLatLng();
           x.p = [ll.lat, ll.lng]; x.src = "drag"; if (rh.putts) rh.firstPuttFt = firstPuttFt(); persist(); drawAll(false); });
       });
@@ -1802,7 +1813,7 @@ async function holeView(ctx) {
   // pin presets and hints sit just above the sheet
   function placeFloats(hgt = $("#sheet", s)?.offsetHeight || 0) {        // pass the target height: offsetHeight lags during the slide
     s.style.setProperty("--sheet-h", hgt + "px");             // the map credit line sits just above the sheet
-    $("#presets", s).style.bottom = (hgt + 62) + "px"; $("#hint", s).style.bottom = (hgt + 12) + "px"; $("#undoBar", s).style.bottom = (hgt + 12) + "px";
+    $("#hint", s).style.bottom = (hgt + 12) + "px"; $("#undoBar", s).style.bottom = (hgt + 12) + "px";
   }
   // one short hazard line for the compact sheet: the first hazard in play, "+2" for the rest
   function hzLineHTML(rows) {
@@ -1832,11 +1843,11 @@ async function holeView(ctx) {
     const sh = $("#sheet", s); const pin = pinOrCenter(h, getPin());
     // ball on the green: putting in feet, so the yardage hazard panel and its labels step aside
     const greenMode = ctx.mode === "round" && rh.shots?.length && Geo.inRing(measureFrom(), h.green);
-    const hzRows = greenMode ? [] : hazardPanel(course, n, panelLine()); hzLabels(hzRows);
+    const hzRows = greenMode ? [] : hazardPanel(course, n, panelLine()); hzLabels(view === "green" ? [] : hzRows);
     const hp = greenMode ? null : panelHTML(hzRows, ctx.slug, hzOpen);
     const hzLine = greenMode || view === "green" ? "" : hzLineHTML(hzRows);
     const hzHalf = hp ? hp.chips + hp.carry : "";
-    const fullNotes = slopeHTML() + (greenMode ? "" : pinHazardsHTML(course, n, pin));
+    const fullNotes = (view === "green" ? "" : slopeHTML()) + (greenMode ? "" : pinHazardsHTML(course, n, pin));
     $("#ydHead", s).textContent = onTeeGPS() ? `par ${h.par} · plays ${playsToday()} today (card ${card})` : `par ${h.par} · ${card} yd`;
     const navBtns = done => `<div class="row"><button class="btn alt" id="pv">‹ Hole ${n > 1 ? n - 1 : NH}</button>${n < NH ? `<button class="btn" id="nx">Hole ${n + 1} ›</button>` : `<button class="btn" id="sum">${done}</button>`}</div>`;
     let cmp = "", half = "", full = "";
@@ -1927,6 +1938,7 @@ async function holeView(ctx) {
       full += sec(`Penalties${penWords(pn) ? ` · ${penWords(pn)}` : ""}`, `<div class="row"><button class="btn alt small" data-pen="ob">Out of bounds</button><button class="btn alt small" data-pen="prov">Provisional ball</button><button class="btn alt small" data-pen="pa">Penalty area</button></div>
         <div class="row"><button class="btn alt small" id="pen">Other penalty +1${pn.other ? ` (${pn.other})` : ""}</button><button class="btn alt small" id="undo">Undo last shot</button></div>`) + navBtns("Finish round");
     }
+    if (view === "green") { cmp = `<div class="gcmp"><div class="gl">${cmp}</div>${presetGridHTML()}</div>`; half = (slopeHTML() ? sec("Slopes", slopeHTML()) : "") + half; }
     sh.innerHTML = `<div class="grab" role="button" aria-label="Drag up for more, tap to step up"></div><div class="cmp">${cmp}</div><div class="more">${half}</div><div class="more">${full}<div class="fbrow">${feedbackLink()}</div></div>`;
     // the compact block sets the folded height: everything above the half-height extras, plus the bottom padding
     const c = $(".cmp", sh); sheetMin = Math.round(c.offsetTop + c.offsetHeight + parseFloat(getComputedStyle(sh).paddingBottom) + 2);
@@ -1943,6 +1955,8 @@ async function holeView(ctx) {
     on("hzToggle", () => { hzOpen = !hzOpen; prefs.hzOpen = hzOpen; Store.set("viewPrefs", prefs); renderSheet(); });
     const setHide = v => { const all = Store.get("slopeHide:" + ctx.slug, {}); all[n] = v; Store.set("slopeHide:" + ctx.slug, all); drawAll(false); };
     on("slopeHide", () => setHide(true)); on("slopeShow", () => setHide(false));
+    on("slopeTog", () => { prefs.slopes = !slopesOn(); Store.set("viewPrefs", prefs); drawAll(false); });
+    sh.querySelectorAll("[data-preset]").forEach(x => x.onclick = () => { const k = x.dataset.preset; setPin(k === "Middle Center" ? null : presetSpots()[k]); drawAll(false); });
     on("pv", () => holeView({ ...ctx, n: n > 1 ? n - 1 : NH }));
     on("nx", () => holeView({ ...ctx, n: n + 1 }));
     on("sum", () => ctx.mode === "plan" ? planSummary(plan.id) : roundSummary(round.id));

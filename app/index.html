@@ -6,7 +6,7 @@
 <title>Driven Golf</title>
 <!-- script ?v= matches APP_VERSION in js/store.js: bump both on every release so phones never mix old and new files -->
 <!-- home-screen app: "Add to Home Screen" opens full screen as "Driven Golf" -->
-<link rel="manifest" href="manifest.webmanifest?v=0.9.7-beta">
+<link rel="manifest" href="manifest.webmanifest?v=0.9.8-beta">
 <meta name="theme-color" content="#1E3A2B">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -183,8 +183,17 @@
   .hint { left: 50%; transform: translateX(-50%); background: var(--hunter); color: var(--ivory); border: 1px solid var(--brass); padding: 10px 14px; font-size: 13.5px;
           max-width: calc(100% - 32px); display: flex; gap: 12px; align-items: center; }
   .hint button { all: unset; cursor: pointer; color: var(--brass); font: 600 12px var(--text); letter-spacing: .18em; text-transform: uppercase; min-height: 32px; }
-  .presets { left: 10px; right: 10px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; max-width: 340px; margin: 0 auto; }
-  .presets button { all: unset; cursor: pointer; text-align: center; background: var(--paper); border: 1px solid var(--hunter); min-height: 36px; display: grid; place-items: center; font: 500 12px var(--text); }
+  /* Green view: the pin presets, a small 3x3 grid beside the yardage, laid out like the green */
+  .gcmp { display: flex; gap: 12px; align-items: flex-start; } .gcmp .gl { flex: 1; min-width: 0; }
+  .pgrid { flex: none; width: 120px; text-align: center; }
+  .pgl { display: grid; grid-template-columns: 1fr auto 1fr; align-items: baseline; } .pgl .seclbl { text-align: left; }
+  .pgrid small { font: 600 9px var(--text); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+  .pgd { display: grid; grid-template-columns: repeat(3, 28px); gap: 6px; justify-content: center; padding: 6px 4px; margin: 2px 0;
+    background: #BFD49A; border: 1px solid var(--hunter); border-radius: 46% 46% 42% 42% / 50% 50% 40% 40%; }
+  .pdot { all: unset; cursor: pointer; width: 28px; height: 28px; border-radius: 999px; display: grid; place-items: center; }
+  .pdot::after { content: ""; width: 16px; height: 16px; border-radius: 999px; background: var(--paper); border: 1px solid var(--hunter); }
+  .pdot.on::after { width: 18px; height: 18px; background: var(--claret); border: 2px solid var(--ivory); box-shadow: 0 0 0 1px var(--claret); }
+  .pgf { display: block; }
   .seg { display: flex; background: var(--paper); border: 1px solid var(--hunter); }
   .seg button { all: unset; cursor: pointer; padding: 8px 12px; font: 500 13px var(--text); }
   .seg button.on { background: var(--hunter); color: var(--ivory); }
@@ -336,9 +345,9 @@
 </head>
 <body>
 <div id="app"></div>
-<script src="js/geo.js?v=0.9.7-beta"></script>
-<script src="js/store.js?v=0.9.7-beta"></script>
-<script src="js/drills.js?v=0.9.7-beta"></script>
-<script src="js/app.js?v=0.9.7-beta"></script>
+<script src="js/geo.js?v=0.9.8-beta"></script>
+<script src="js/store.js?v=0.9.8-beta"></script>
+<script src="js/drills.js?v=0.9.8-beta"></script>
+<script src="js/app.js?v=0.9.8-beta"></script>
 </body>
 </html>

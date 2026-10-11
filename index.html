@@ -8,7 +8,7 @@
 <title>Driven Golf</title>
 <!-- script ?v= matches APP_VERSION in js/store.js: bump both on every release so phones never mix old and new files -->
 <!-- home-screen app: "Add to Home Screen" opens full screen as "Driven Golf" -->
-<link rel="manifest" href="manifest.webmanifest?v=0.10.0-beta">
+<link rel="manifest" href="manifest.webmanifest?v=0.10.1-beta">
 <meta name="theme-color" content="#1E3A2B">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -288,6 +288,27 @@
   .tog { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
   .esatag { position: absolute; transform: translate(-50%, -50%); font: 700 9px var(--text); letter-spacing: .1em; color: #2F5B2A; background: #FFFDF7cc; border: 1px solid #6E9A62; padding: 0 3px; white-space: nowrap; }
   .tsh { transform: translate(1.5px, 2.5px); }
+  /* first-time tour, tips */
+  .tour { position: fixed; inset: 0; z-index: 4200; background: var(--ivory); display: flex; flex-direction: column; padding: max(16px, env(safe-area-inset-top)) 0 max(20px, env(safe-area-inset-bottom)); }
+  .ttop { display: flex; justify-content: space-between; align-items: center; padding: 0 20px; }
+  .ttrack { flex: 1; display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; }
+  .ttrack::-webkit-scrollbar { display: none; }
+  .tcard { flex: 0 0 100%; scroll-snap-align: center; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 0 32px; box-sizing: border-box; gap: 6px; }
+  .tcard .ttl { font: 400 28px/1.15 var(--head); color: var(--hunter); margin: 14px 0 4px; letter-spacing: 0; text-transform: none; }
+  .tcard .ttl::after { display: none; }
+  .tcard p { font-size: 16px; line-height: 1.5; color: var(--ink); max-width: 340px; margin: 0; }
+  .tart { width: 160px; height: 107px; fill: none; stroke: var(--hunter); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .tart .b { stroke: var(--brass); } .modal .tart { width: 120px; height: 80px; align-self: center; }
+  .tdots { display: flex; justify-content: center; gap: 8px; margin: 10px 0 14px; }
+  .tdots i { width: 7px; height: 7px; border-radius: 9px; border: 1px solid var(--hunter); cursor: pointer; } .tdots i.on { background: var(--hunter); }
+  .tour > .btn { margin: 0 20px; }
+  .tip { position: fixed; z-index: 4500; background: var(--hunter); color: var(--ivory); border: 1px solid var(--brass); padding: 10px 12px; font-size: 14px; line-height: 1.4; box-shadow: 0 6px 18px #1B1B1840; }
+  .tip::after { content: ""; position: absolute; left: calc(var(--ax, 50%) - 7px); width: 12px; height: 12px; background: var(--hunter); border: 1px solid var(--brass); transform: rotate(45deg); }
+  .tip.dn::after { top: -7px; border-right: 0; border-bottom: 0; } .tip.up::after { bottom: -7px; border-left: 0; border-top: 0; }
+  .tiprow { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; } .tiprow small { color: var(--brass); }
+  .tip .linkbtn { color: var(--brass); }
+  .tiphi { outline: 2px solid var(--brass); outline-offset: 3px; }
+  .tournote { gap: 4px; } .tournote b { font: 500 18px var(--head); } .tournote small { color: var(--muted); }
   .undobar { left: 12px; right: 12px; background: var(--hunter); color: var(--ivory); border: 1px solid var(--brass); padding: 8px 12px; display: flex; align-items: center; gap: 12px; font-size: 14px; z-index: 720; }
   .undobar span { flex: 1; } .undobar button { all: unset; cursor: pointer; color: var(--brass); font: 600 12px var(--text); letter-spacing: .18em; text-transform: uppercase; min-height: 32px; padding: 0 4px; }
   .pflow { display: flex; flex-direction: column; gap: 10px; } .pflow .row .btn { text-transform: uppercase; }
@@ -370,9 +391,10 @@
 </head>
 <body>
 <div id="app"></div>
-<script src="js/geo.js?v=0.10.0-beta"></script>
-<script src="js/store.js?v=0.10.0-beta"></script>
-<script src="js/drills.js?v=0.10.0-beta"></script>
-<script src="js/app.js?v=0.10.0-beta"></script>
+<script src="js/geo.js?v=0.10.1-beta"></script>
+<script src="js/store.js?v=0.10.1-beta"></script>
+<script src="js/drills.js?v=0.10.1-beta"></script>
+<script src="js/tour.js?v=0.10.1-beta"></script>
+<script src="js/app.js?v=0.10.1-beta"></script>
 </body>
 </html>

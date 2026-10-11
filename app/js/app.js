@@ -605,6 +605,7 @@ async function home() {
     <div class="caps hcpline">${pr.hcp !== "" && pr.hcp != null ? `Handicap ${esc(pr.hcp)}` : "Handicap —"}${hc ? ` · ${esc(hc.name)}` : ""}</div></div>`));
   $("#av", sc).onclick = profilePage;
   const b = el(`<div class="body"></div>`); sc.appendChild(b);
+  tourNote(b);                                              // existing members: "New: take the tour", once
   b.appendChild(el(`<h2>Today's round</h2>`));
   const nu = el(`<div class="card nextup"><div class="muted it">${esc(next.why)}</div><div class="cname">${esc(nm.name)}</div>
     <div class="muted">${esc(nm.course)} · ${esc(next.tees)} tees</div>
@@ -677,6 +678,7 @@ async function practicePage() {
   const b = screen("Practice", null, "", {}, { tab: "practice" });
   b.appendChild(el(`<h2>From the practice tee</h2>`)); focusCard(b);
   sessionBuilder(b);
+  setTimeout(() => tipOnce("practice", [{ sel: ".focus", text: "Your focus comes from your rounds, with a drill to fix it. Build a session for the time you have, or open a practice area to log chips and putts." }]), 900);
   const drillsBox = el(`<div style="display:contents"></div>`); b.appendChild(drillsBox);
   b.appendChild(el(`<h2>Practice areas</h2>`));
   const seen = new Set(), list = el(`<div class="list"></div>`);
@@ -807,6 +809,7 @@ function planWizard() {
   md.querySelectorAll("[data-s]").forEach(b => b.onclick = () => { strat = b.dataset.s; md.querySelectorAll("[data-s]").forEach(x => x.classList.toggle("on", x === b)); $("#sblurb", md).textContent = STRATEGIES[strat].blurb; });
   $("#wx0", md).onclick = () => md.remove();
   $("#self", md).onclick = () => { md.remove(); pickCourse(null); };
+  setTimeout(() => tipOnce("autoplan", [{ sel: "#strat", text: "Auto-plan plans all 18 holes from your bag: Safe stays wide of trouble and lays up more, Balanced takes the longest club that stays safe, Aggressive takes tighter lines. Or plan it yourself, hole by hole." }], md), 300);
   $("#auto", md).onclick = () => {
     if (A.bag.filter(c => c.carry > 0).length < 3) return toast("Auto-plan needs your club yardages. Add them in My Bag (Member Profile).", 3500);
     md.remove(); pickCourse(strat);
@@ -1069,6 +1072,11 @@ function profilePage() {
   $("#ec", acts).onclick = () => profileEdit("bag"); $("#ex", acts).onclick = exportData; b.appendChild(acts);
   const data = el(`<p class="muted it" style="margin:0">Saved on this phone only. Export a backup about once a month${last == null ? " (no backup yet)" : ` (last one ${last} day${last === 1 ? "" : "s"} ago)`}. <button class="linkbtn" id="im">Import data</button> · Driven Golf ${APP_VERSION}</p>`);
   $("#im", data).onclick = importData; b.appendChild(data);
+  b.appendChild(el(`<h2>Help</h2>`));
+  const help = el(`<div class="list"><div class="item" id="hw"><div class="grow"><b>How Driven Golf works</b><small>The five welcome cards again</small></div><span>›</span></div>
+    <div class="item" id="rt"><div class="grow"><b>Reset tips</b><small>Show the one-time tips again on the hole, plan and practice screens</small></div><span>›</span></div></div>`);
+  $("#hw", help).onclick = async () => { await welcomeCards("Back to my profile"); profilePage(); };
+  $("#rt", help).onclick = resetTips; b.appendChild(help);
   b.appendChild(el(`<h2>Mapping</h2>`));
   b.appendChild(el(`<div class="list"><a class="item" style="text-decoration:none;color:inherit" href="../handmap/great28.html"><div class="grow"><b>Map the Great 28</b><small>Tap each hole's tee and green on the aerial, then send Claude the file</small></div><span>›</span></a></div>`));
 }
@@ -1693,12 +1701,14 @@ async function holeView(ctx) {
   function startGPS() {
     if (!("geolocation" in navigator) || !window.isSecureContext) { toast("Location needs the https:// address on your phone."); return; }
     if (A.gpsWatch !== null) return;
+    if (!Store.get("locOk", false)) return locationCard().then(ok => ok && startGPS());   // first time: what location is for
     A.gpsWatch = navigator.geolocation.watchPosition(pos => {
       A.gps = { p: [pos.coords.latitude, pos.coords.longitude], acc: pos.coords.accuracy * YD, t: Date.now() }; drawAll(false);
     }, err => { toast(err.code === 1 ? "Location is blocked for this site. Allow it in your browser settings." : "No GPS fix yet."); }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 });
   }
   function bestFix(cb) {
     if (!("geolocation" in navigator) || !window.isSecureContext) return toast("Location needs the https:// address on your phone.");
+    if (!Store.get("locOk", false)) return locationCard().then(ok => ok && bestFix(cb));
     let best = null; toast("Finding you…", 1500);
     const id = navigator.geolocation.watchPosition(p => { if (!best || p.coords.accuracy < best.coords.accuracy) best = p; if (best.coords.accuracy <= 4) done(); },
       () => done(), { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
@@ -2224,6 +2234,15 @@ async function holeView(ctx) {
     }
   }
   setBase(base); aim();
+  setTimeout(() => {                                       // one-time tips on the first hole view and the first plan
+    if (!document.body.contains(s)) return;
+    if (ctx.mode === "plan") tipOnce("plan", [
+      { sel: "#sheet .grab", text: "Drag the panel up to plan each shot: tap a club and the target goes where that club lands, or drag a target on the map and the club is picked for you." }], s);
+    else tipOnce("hole", [
+      { sel: "#sheet .grab", text: "The panel: yardages up front. Drag it up for hazards, your club and plan; tap the map to fold it back down." },
+      { sel: "#atBall", text: "I'm at my ball: stand by your ball and tap. GPS marks the shot and the yardages start from there." },
+      { sel: "#pinBtn", text: "The flag button opens Green view: slopes, the pin presets, and drag the flag (or tap the green) to move the pin. Tap it again to go back." }], s);
+  }, 700);
 }
 
 // ---------------------------------------------------------------- plan summary, copy, switch tees
@@ -2359,7 +2378,7 @@ async function boot() {
   if (location.hash === "#teelog") return teeLogPage();
   if (!A.index.length) await loadIndex();
   if (!Store.get("betaSeen", false)) await betaNote();
-  if (!A.profile.name) return setupWizard();
+  if (!A.profile.name) { if (!Store.get("tourSeen", false)) await welcomeCards("Set up my bag"); return setupWizard(); }
   return home();
 }
 

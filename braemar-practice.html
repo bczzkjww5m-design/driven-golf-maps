@@ -73,6 +73,9 @@
   button:disabled { opacity: .4; cursor: default; }
   .big:focus-visible, .small:focus-visible { outline: 3px solid var(--gps); outline-offset: 2px; }
   #msg { font-size: 13px; color: var(--flag); }
+  .dgcard { position: fixed; inset: 0; z-index: 5000; background: #1B1B1866; display: grid; place-items: center; padding: 16px; }
+  .dgcard .in { background: #FFFDF7; border: 1px solid #B08D57; padding: 18px; max-width: 360px; display: flex; flex-direction: column; gap: 8px; font-size: 15px; line-height: 1.45; }
+  .dgcard b { font-size: 18px; } .dgcard p { margin: 0; }
 
   #logSheet { position: fixed; inset: 0; z-index: 3000; background: #0008; display: flex; align-items: flex-end; }
   #logSheet .sheet { background: var(--chalk); width: 100%; max-height: 75%; border-radius: 16px 16px 0 0;
@@ -510,9 +513,23 @@ $("puttBtn").onclick = () => {
   sheet.hidden = false; step();
 };
 
+// ---------- one-time card and tip, shared with the app (dg:locOk, dg:tipsSeen) ----------
+const dgGet = (k, d) => { try { return JSON.parse(localStorage.getItem("dg:" + k)) ?? d; } catch { return d; } };
+const dgSet = (k, v) => { try { localStorage.setItem("dg:" + k, JSON.stringify(v)); } catch {} };
+function card(html, buttons) {        // a small centered card with buttons [[label, onclick, primary]]
+  const ov = document.createElement("div"); ov.className = "dgcard";
+  ov.innerHTML = `<div class="in">${html}<div class="row">${buttons.map((b, i) => `<button class="big${b[2] ? "" : " alt"}" data-i="${i}">${b[0]}</button>`).join("")}</div></div>`;
+  ov.querySelectorAll("[data-i]").forEach(x => x.onclick = () => { ov.remove(); buttons[+x.dataset.i][1](); });
+  document.body.appendChild(ov);
+}
+if (!dgGet("tipsSeen", {}).practicePage) setTimeout(() => card(`<b>Practice area</b><p>Tap the map (or I'm at my ball) to place your ball, pick the lie, hit, then Mark finish where it stopped. Each chip is scored by how close it finishes; Log putts works the same on the green.</p>`,
+  [["Got it", () => { const t = dgGet("tipsSeen", {}); t.practicePage = true; dgSet("tipsSeen", t); }, true]]), 600);
+
 // ---------- GPS: "I'm at my ball" ----------
 $("gpsBtn").onclick = () => {
   if (!("geolocation" in navigator)) return flash("This browser can't share location. Tap the map to place your ball.");
+  if (!dgGet("locOk", false)) return card(`<b>Location is only for yardages</b><p>Your phone's location is used to place your ball and measure distances. It stays on this phone: nothing is sent anywhere. Your phone asks next.</p>`,
+    [["Not now", () => {}], ["Continue", () => { dgSet("locOk", true); $("gpsBtn").onclick(); }, true]]);
   if (!window.isSecureContext) return flash("Location only works on an https:// address.");
   const btn = $("gpsBtn"); btn.disabled = true; btn.textContent = "Finding you…";
   let best = null;

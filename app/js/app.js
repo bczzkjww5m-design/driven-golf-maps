@@ -620,7 +620,7 @@ async function home() {
   const nu = el(`<div class="card nextup"><div class="muted it">${esc(next.why)}</div><div class="cname">${esc(nm.name)}</div>
     <div class="muted">${esc(nm.course)} · ${esc(next.tees)} tees</div>
     <button class="btn" id="go">Tee off</button>
-    <div class="row"><button class="btn alt" id="pl">Plan a round</button><button class="btn alt" id="pr">Practice</button></div></div>`);
+    <div class="row"><button class="btn alt" id="pl">Plan round</button><button class="btn alt" id="pr">Practice</button></div></div>`);
   $("#go", nu).onclick = () => startRound(next.slug, next.tees);
   $("#pl", nu).onclick = planWizard;
   $("#pr", nu).onclick = () => nm.practice ? (location.href = nm.practice) : practicePage();
@@ -1077,16 +1077,14 @@ function profilePage() {
   b.appendChild(tbl);
   const notes = bagWarnings(A.bag);
   if (notes.length) b.appendChild(el(`<div>${notes.map(t => `<div class="gapnote">${esc(t)}</div>`).join("")}</div>`));
-  const acts = el(`<div class="row"><button class="btn alt" id="ec">Edit clubs</button><button class="btn alt" id="ex">Export data</button></div>`);
-  $("#ec", acts).onclick = () => profileEdit("bag"); $("#ex", acts).onclick = exportData; b.appendChild(acts);
+  const acts = el(`<div class="row"><button class="btn alt" id="ec">Edit clubs</button></div>`);
+  $("#ec", acts).onclick = () => profileEdit("bag"); b.appendChild(acts);
   b.appendChild(el(`<h2>Help</h2>`));
   const help = el(`<div class="list"><div class="item" id="hw"><div class="grow"><b>How Koan Golf works</b><small>The five welcome cards again</small></div><span>›</span></div>
     <div class="item" id="rt"><div class="grow"><b>Reset tips</b><small>Show the one-time tips again on the hole, plan and practice screens</small></div><span>›</span></div>
     <a class="item" style="color:inherit" href="${feedbackHref()}"><div class="grow"><b>Send feedback</b><small>An email to the team, with your app version and screen filled in</small></div><span>›</span></a></div>`);
   $("#hw", help).onclick = async () => { await welcomeCards("Back to my profile"); profilePage(); };
   $("#rt", help).onclick = resetTips; b.appendChild(help);
-  b.appendChild(el(`<h2>Mapping</h2>`));
-  b.appendChild(el(`<div class="list"><a class="item" style="text-decoration:none;color:inherit" href="../handmap/great28.html"><div class="grow"><b>Map the Great 28</b><small>Tap each hole's tee and green on the aerial, then send Claude the file</small></div><span>›</span></a></div>`));
   const about = el(`<div class="list"><div class="item" id="ab"><div class="grow"><b>About & data</b><small>Koan Golf ${APP_VERSION} · backups and import</small></div><span>›</span></div></div>`);
   $("#ab", about).onclick = aboutPage; b.appendChild(about);
 }
@@ -2396,6 +2394,8 @@ async function boot() {
   Store.migrate();
   A.profile = Store.profile(); A.bag = Store.bag(); A.settings = Store.settings();
   if (location.hash === "#teelog") return teeLogPage();
+  if (location.hash === "#map") return location.replace("../handmap/great28.html");   // the Great 28 mapping tool: only by address
+
   if (!A.index.length) await loadIndex();
   hideSplash();                                            // before the beta note or welcome cards
   if (!Store.get("betaSeen", false)) await betaNote();

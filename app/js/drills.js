@@ -1,4 +1,4 @@
-// Driven Golf practice prescriptions. Every recommendation is built only from content/drill-library.md (read at run time):
+// Koan Golf practice prescriptions. Every recommendation is built only from content/drill-library.md (read at run time):
 // Why (my stat) · the drill and its time · numbered Setup · numbered How with its one cue · Score and goal · Make it harder.
 // Loaded before app.js; uses app.js helpers at call time.
 

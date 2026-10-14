@@ -1,7 +1,7 @@
 {
-  "name": "Driven Golf",
-  "short_name": "Driven Golf",
-  "description": "Mastering the art of learning to play your best golf.",
+  "name": "Koan Golf",
+  "short_name": "Koan Golf",
+  "description": "Forever unsolved. Never perfected. Endlessly pursued.",
   "id": "./",
   "start_url": "../",
   "scope": "../",

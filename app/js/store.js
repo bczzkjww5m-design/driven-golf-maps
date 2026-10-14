@@ -60,7 +60,7 @@ try { Object.keys(localStorage).filter(k => k.startsWith("dg:teeFix:")).forEach(
 // ---------------------------------------------------------------- versions, safe updates, backups
 // APP_VERSION: shown in the profile, the export file and feedback emails. DATA_VERSION: the saved-data format.
 // Updates never delete saved data: migrate() only adds/converts, and keeps the old keys.
-const APP_VERSION = "0.10.1-beta";
+const APP_VERSION = "0.11.0-beta";
 const DATA_VERSION = 2;
 Store.migrate = function () {
   try {
@@ -73,7 +73,7 @@ Store.migrate = function () {
     if (v !== DATA_VERSION) Store.set("dataVersion", DATA_VERSION);
   } catch (e) { /* never block the app over a migration */ }
 };
-// everything the app saved on this phone (every "dg:" key), as one file
+// everything the app saved on this phone (every "dg:" key; the names predate Koan Golf and stay so saved data carries over), as one file
 Store.exportAll = function () {
   const data = {};
   Object.keys(localStorage).filter(k => k.startsWith("dg:") && k !== "dg:_beforeImport").forEach(k => {
@@ -84,10 +84,10 @@ Store.exportAll = function () {
   const practice = {};
   Object.keys(localStorage).filter(k => k.startsWith("driven-practice:")).forEach(k => {
     const raw = localStorage.getItem(k); try { practice[k] = JSON.parse(raw); } catch { practice[k] = { $raw: raw }; } });
-  return { app: "Driven Golf", appVersion: APP_VERSION, dataVersion: Store.get("dataVersion", DATA_VERSION), exportedAt: new Date().toISOString(), data, practice };
+  return { app: "Koan Golf", appVersion: APP_VERSION, dataVersion: Store.get("dataVersion", DATA_VERSION), exportedAt: new Date().toISOString(), data, practice };
 };
 Store.importAll = function (file) {
-  if (!file || file.app !== "Driven Golf" || typeof file.data !== "object") throw new Error("That isn't a Driven Golf backup file.");
+  if (!file || !["Koan Golf", "Driven Golf"].includes(file.app) || typeof file.data !== "object") throw new Error("That isn't a Koan Golf backup file.");   // backups from before the rename still restore
   const before = Store.exportAll();                         // one safety copy of what was here, in case of a mistake
   Object.keys(localStorage).filter(k => (k.startsWith("dg:") && k !== "dg:_beforeImport") || (file.practice && k.startsWith("driven-practice:"))).forEach(k => localStorage.removeItem(k));
   Object.entries(file.practice || {}).forEach(([k, v]) => { if (k.startsWith("driven-practice:")) localStorage.setItem(k, v && typeof v === "object" && "$raw" in v ? v.$raw : JSON.stringify(v)); });

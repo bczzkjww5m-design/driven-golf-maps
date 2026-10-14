@@ -1,4 +1,4 @@
-// Driven Golf: courses, tees, pins, hazards, round plans, rounds and plan-vs-actual. Saved on this phone.
+// Koan Golf (formerly Driven Golf): courses, tees, pins, hazards, round plans, rounds and plan-vs-actual. Saved on this phone.
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const el = html => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -502,7 +502,7 @@ function feedbackHref() {
   const w = A.where || {}, m = w.course ? meta(w.course) : null;
   const body = [`App version: ${APP_VERSION}`, `Screen: ${w.screen || "?"}`, m ? `Course: ${m.name} · ${m.course}` : "Course: —", `Hole: ${w.hole || "—"}`,
     `Phone: ${navigator.userAgent}`, "", "What happened, and what did you expect?", ""].join("\n");
-  return `mailto:aaronweinard@gmail.com?subject=${encodeURIComponent(`Driven Golf feedback (${APP_VERSION})`)}&body=${encodeURIComponent(body)}`;
+  return `mailto:aaronweinard@gmail.com?subject=${encodeURIComponent(`Koan Golf feedback (${APP_VERSION})`)}&body=${encodeURIComponent(body)}`;
 }
 const feedbackLink = () => `<a class="fb" href="${feedbackHref()}">Feedback</a>`;
 function screen(title, back, body, where = {}, opts = {}) {
@@ -514,17 +514,27 @@ function screen(title, back, body, where = {}, opts = {}) {
 }
 
 // ---------------------------------------------------------------- brand pieces
-// the crest: shield with a brass outline and a thin inner line, DG, a claret flag, EST. 2026
-const CREST = (px = 40) => `<svg class="crest" width="${px}" height="${Math.round(px * 76 / 64)}" viewBox="0 0 64 76" role="img" aria-label="Driven Golf crest">
-  <path d="M5 3H59V38C59 55 45 66 32 71 19 66 5 55 5 38Z" fill="#B08D57"/><path d="M7 5H57V38C57 54 44 64 32 68.6 20 64 7 54 7 38Z" fill="#1E3A2B"/>
-  <path d="M10.5 8.5H53.5V38C53.5 51 42 60 32 64.4 22 60 10.5 51 10.5 38Z" fill="none" stroke="#B08D57" stroke-width=".8"/>
-  <path d="M32 13V24" stroke="#F6F1E4" stroke-width="1.1"/><path d="M32.4 13 40 15.6 32.4 18.2Z" fill="#7A1F2B"/>
-  <text x="32" y="46" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-weight="600" font-size="17" fill="#F6F1E4">DG</text>
-  <path d="M26 49.5H38" stroke="#B08D57" stroke-width=".8"/>
-  <text x="32" y="56.6" text-anchor="middle" font-family="Jost, sans-serif" font-weight="500" font-size="4.2" letter-spacing=".9" fill="#B08D57">EST. 2026</text></svg>`;
-const LOGO = CREST;
-const WORDMARK = `<span class="wordmark"><b>Driven Golf</b><i>Mastering the art of learning to play your best golf.</i></span>`;
-const initials = name => (name || "").trim().split(/\s+/).map(w => w[0]).join("").slice(0, 2).toUpperCase() || "DG";
+// the Enso: an open brush circle in brass with a flagstick and a claret flag (the designer's drawing, used exactly).
+// On dark: ivory stick and the cup; on light: hunter stick, no cup.
+const ENSO = (px = 120, light = false) => `<svg class="enso" width="${px}" height="${px}" viewBox="0 0 170 170" role="img" aria-label="Koan Golf">
+  <path d="M118 28 C88 10 40 18 24 58 C8 98 34 146 80 150 C122 154 152 122 150 84 C149 66 142 52 132 42" fill="none" stroke="#B08D57" stroke-width="13" stroke-linecap="round"/>
+  <path d="M126 36 C100 20 52 24 34 60" fill="none" stroke="#B08D57" stroke-width="5" stroke-linecap="round" opacity="0.55"/>
+  <path d="M30 104 C40 132 64 146 90 146" fill="none" stroke="#C9A773" stroke-width="3" stroke-linecap="round" opacity="0.6"/>
+  <path d="M85 112 V58" stroke="${light ? "#1E3A2B" : "#F6F1E4"}" stroke-width="3" stroke-linecap="round"/>
+  <path d="M85 58 L104 65 L85 72 Z" fill="#9E2A38"/>${light ? "" : `
+  <ellipse cx="85" cy="113" rx="9" ry="3" fill="#F6F1E4" opacity="0.9"/>`}</svg>`;
+// the small mark (Clubhouse, member card, course header): the app-icon version, the Enso on a rounded hunter square
+// with a thicker circle and stick, a brighter flag and only the main circle stroke
+const ENSO_MARK = (px = 34) => `<svg class="crest" width="${px}" height="${px}" viewBox="0 0 170 170" role="img" aria-label="Koan Golf">
+  <rect width="170" height="170" rx="38" fill="#1E3A2B"/><g transform="translate(85 85) scale(.8) translate(-87 -84)">
+  <path d="M118 28 C88 10 40 18 24 58 C8 98 34 146 80 150 C122 154 152 122 150 84 C149 66 142 52 132 42" fill="none" stroke="#B08D57" stroke-width="15" stroke-linecap="round"/>
+  <path d="M85 112 V58" stroke="#F6F1E4" stroke-width="6" stroke-linecap="round"/><path d="M85 58 L104 65 L85 72 Z" fill="#C2414F"/></g></svg>`;
+const CREST = ENSO_MARK, LOGO = ENSO_MARK;
+// the wordmark: KOAN (Plus Jakarta Sans Light, spaced capitals) over GOLF (Jost, small, widely spaced)
+const WORDMARK_FULL = (light = false, size = 34) => `<span class="kwm${light ? " light" : ""}" style="--kw:${size}px"><b>KOAN</b><i>GOLF</i></span>`;
+const TAGLINE = "Forever unsolved. Never perfected. Endlessly pursued.";
+const WORDMARK = `<span class="wordmark"><b>Koan Golf</b><i>${TAGLINE}</i></span>`;
+const initials = name => (name || "").trim().split(/\s+/).map(w => w[0]).join("").slice(0, 2).toUpperCase() || "KG";
 const greeting = () => { const h = new Date().getHours(); return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening"; };
 const TEE_COLORS = { gold: "#D4A72C", black: "#111111", duncan: "#111111", championship: "#111111", blue: "#2F80ED", white: "#FFFFFF",
   red: "#FF5A3C", green: "#2E8B57", silver: "#B8BEC5", long: "#145440" };
@@ -599,7 +609,7 @@ async function home() {
   else if (lastR && meta(lastR.course).name) next = { slug: lastR.course, tees: lastR.tees, why: "Last played" };
   else { const slug = pr.homeCourse || A.index[0].slug, c = await loadCourse(slug); next = { slug, tees: pr.prefTees?.[slug] || c.teeOrder[0], why: "Your home course" }; }
   const nm = meta(next.slug), hc = pr.homeCourse ? meta(pr.homeCourse) : null;
-  sc.appendChild(el(`<div class="hero"><div class="top">${CREST(34)}<div class="grow">${WORDMARK}</div>${feedbackLink()}<button class="avatar" id="av" aria-label="Member Profile">${esc(initials(pr.name))}</button></div>
+  sc.appendChild(el(`<div class="hero"><div class="top">${ENSO_MARK(34)}<div class="grow">${WORDMARK}</div>${feedbackLink()}<button class="avatar" id="av" aria-label="Member Profile">${esc(initials(pr.name))}</button></div>
     <div class="caps eyebrow">The Clubhouse</div>
     <h1>${greeting()}${pr.name ? `, ${esc(pr.name.split(" ")[0])}` : ""}.</h1>
     <div class="caps hcpline">${pr.hcp !== "" && pr.hcp != null ? `Handicap ${esc(pr.hcp)}` : "Handicap —"}${hc ? ` · ${esc(hc.name)}` : ""}</div></div>`));
@@ -753,7 +763,7 @@ async function coursePage(slug) {
   const prefTee = A.settings.prefTees?.[slug];
   let tee = [prefTee, Store.get("lastTee:" + slug, null), course.teeOrder[0]].find(t => t && course.teeOrder.includes(t));
   const [city, st] = m.city.split(",").map(x => x.trim());
-  sc.appendChild(el(`<div class="chead"><div style="display:flex;align-items:center;gap:10px"><button class="iconbtn" id="bk" aria-label="Back">‹</button><span style="flex:1"></span>${feedbackLink()}${CREST(26)}</div>
+  sc.appendChild(el(`<div class="chead"><div style="display:flex;align-items:center;gap:10px"><button class="iconbtn" id="bk" aria-label="Back">‹</button><span style="flex:1"></span>${feedbackLink()}${ENSO_MARK(26)}</div>
     <h1>${esc(m.name)}</h1><div class="caps sub2">${esc(city)}${st ? `, ${esc(st)}` : ""} · Par ${course.par.reduce((a, c) => a + c, 0)}${m.course && !/^Championship|^18 holes/.test(m.course) ? ` · ${esc(m.course)}` : ""}</div></div>`));
   $("#bk", sc).onclick = () => (A.tab === "play" ? playPage() : home());
   const b = el(`<div class="body"></div>`); sc.appendChild(b);
@@ -940,11 +950,11 @@ function setupWizard() {
 
 // ---------------------------------------------------------------- backups: export / import everything on this phone
 async function exportData() {
-  const file = Store.exportAll(), name = `driven-golf-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  const file = Store.exportAll(), name = `koan-golf-backup-${new Date().toISOString().slice(0, 10)}.json`;
   const blob = new Blob([JSON.stringify(file, null, 1)], { type: "application/json" });
   const f = new File([blob], name, { type: "application/json" });
   try {
-    if (navigator.canShare && navigator.canShare({ files: [f] })) await navigator.share({ files: [f], title: "Driven Golf backup" });   // text, email, AirDrop
+    if (navigator.canShare && navigator.canShare({ files: [f] })) await navigator.share({ files: [f], title: "Koan Golf backup" });   // text, email, AirDrop
     else { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; a.click(); }
     Store.set("lastExport", Date.now()); toast("Backup saved");
   } catch (e) { if (e.name !== "AbortError") toast("Couldn't share the file: " + e.message); }
@@ -952,7 +962,7 @@ async function exportData() {
 function importData() {
   const inp = document.createElement("input"); inp.type = "file"; inp.accept = ".json,application/json";
   inp.onchange = async () => {
-    let file; try { file = JSON.parse(await inp.files[0].text()); if (file.app !== "Driven Golf") throw 0; } catch { return toast("That isn't a Driven Golf backup file."); }
+    let file; try { file = JSON.parse(await inp.files[0].text()); if (!["Koan Golf", "Driven Golf"].includes(file.app)) throw 0; } catch { return toast("That isn't a Koan Golf backup file."); }
     const n = k => Array.isArray(file.data[k]) ? file.data[k].length : 0;
     const ps = Object.values(file.practice || {}).reduce((t, v) => t + (Array.isArray(v) ? v.length : 0), 0);
     const md = modal(`<h3 style="margin:0">Restore this backup?</h3><p>From ${new Date(file.exportedAt).toLocaleString()} (version ${esc(file.appVersion)}): ${n("rounds")} rounds, ${n("plans")} plans, ${ps} practice shots, profile and bag.</p>
@@ -1044,7 +1054,7 @@ function profileEdit(section) {
   const last = daysSince(Store.get("lastExport", null));
   const data = el(`<div class="card"><h3>Your data</h3><p class="muted" style="margin:0">Everything is saved on this phone only. Export a backup about once a month${last == null ? " (no backup yet)" : ` (last one ${last} day${last === 1 ? "" : "s"} ago)`}: it holds your rounds, plans, pins, profile and bag in one file you can text, email or AirDrop to yourself.</p>
     <div class="row"><button class="btn alt" id="ex">Export my data</button><button class="btn alt" id="im">Import data</button></div>
-    <p class="muted" style="margin:0">Driven Golf ${APP_VERSION}</p></div>`);
+    <p class="muted" style="margin:0">Koan Golf ${APP_VERSION}</p></div>`);
   $("#ex", data).onclick = exportData; $("#im", data).onclick = importData;
   b.append(prof, bagCard, pt, save, data);
   if (section === "bag") requestAnimationFrame(() => bagCard.scrollIntoView({ block: "start" }));
@@ -1053,8 +1063,8 @@ function profileEdit(section) {
 // Member Profile (the only way in: the initials button on the Clubhouse)
 function profilePage() {
   const p = A.profile, b = screen("Member Profile", home, ""), hc = p.homeCourse ? meta(p.homeCourse) : null, age = daysSince(p.hcpDate);
-  const card = el(`<div class="member"><div style="display:flex;align-items:flex-start;gap:12px"><div style="flex:1"><div class="caps brass">Driven Golf · Member</div>
-    <div class="mname">${esc(p.name || "Your name")}</div><div class="msub">${[hc ? hc.name : null, p.hand === "L" ? "left-handed" : "right-handed", `${(p.homeElevationFt || 0).toLocaleString()} ft`].filter(Boolean).map(esc).join(" · ")}</div></div>${CREST(44)}</div>
+  const card = el(`<div class="member"><div style="display:flex;align-items:flex-start;gap:12px"><div style="flex:1"><div class="caps brass">Koan Golf · Member</div>
+    <div class="mname">${esc(p.name || "Your name")}</div><div class="msub">${[hc ? hc.name : null, p.hand === "L" ? "left-handed" : "right-handed", `${(p.homeElevationFt || 0).toLocaleString()} ft`].filter(Boolean).map(esc).join(" · ")}</div></div>${ENSO_MARK(40)}</div>
     <div class="divider"></div><div class="caps brass">Handicap index</div><div class="ix">${p.hcp !== "" && p.hcp != null ? esc(p.hcp) : "—"}</div>
     <div class="msub">${p.ghin ? `GHIN ${esc(p.ghin)}` : "No GHIN number yet"}${p.hcpDate ? ` · updated ${new Date(p.hcpDate).toLocaleDateString()}` : ""}${age >= 14 ? ` · ${age} days ago` : ""}</div>
     <div class="row"><a class="btn alt" href="https://www.ghin.com/" target="_blank" rel="noopener" style="text-align:center;text-decoration:none;display:grid;place-items:center">Look up on GHIN</a><button class="btn alt" id="ed">Edit profile</button></div></div>`);
@@ -1070,10 +1080,10 @@ function profilePage() {
   const last = daysSince(Store.get("lastExport", null));
   const acts = el(`<div class="row"><button class="btn alt" id="ec">Edit clubs</button><button class="btn alt" id="ex">Export data</button></div>`);
   $("#ec", acts).onclick = () => profileEdit("bag"); $("#ex", acts).onclick = exportData; b.appendChild(acts);
-  const data = el(`<p class="muted it" style="margin:0">Saved on this phone only. Export a backup about once a month${last == null ? " (no backup yet)" : ` (last one ${last} day${last === 1 ? "" : "s"} ago)`}. <button class="linkbtn" id="im">Import data</button> · Driven Golf ${APP_VERSION}</p>`);
+  const data = el(`<p class="muted it" style="margin:0">Saved on this phone only. Export a backup about once a month${last == null ? " (no backup yet)" : ` (last one ${last} day${last === 1 ? "" : "s"} ago)`}. <button class="linkbtn" id="im">Import data</button> · Koan Golf ${APP_VERSION}</p>`);
   $("#im", data).onclick = importData; b.appendChild(data);
   b.appendChild(el(`<h2>Help</h2>`));
-  const help = el(`<div class="list"><div class="item" id="hw"><div class="grow"><b>How Driven Golf works</b><small>The five welcome cards again</small></div><span>›</span></div>
+  const help = el(`<div class="list"><div class="item" id="hw"><div class="grow"><b>How Koan Golf works</b><small>The five welcome cards again</small></div><span>›</span></div>
     <div class="item" id="rt"><div class="grow"><b>Reset tips</b><small>Show the one-time tips again on the hole, plan and practice screens</small></div><span>›</span></div></div>`);
   $("#hw", help).onclick = async () => { await welcomeCards("Back to my profile"); profilePage(); };
   $("#rt", help).onclick = resetTips; b.appendChild(help);
@@ -2367,7 +2377,7 @@ function teeLogPage() {
 // ---------------------------------------------------------------- start-up: safe data update, beta note, first-time setup
 function betaNote() {
   return new Promise(res => {
-    const md = modal(`<h3 style="margin:0">Driven Golf beta</h3><p>Distances are estimates from public maps. Your data stays on your phone. Please send feedback.</p>
+    const md = modal(`<h3 style="margin:0">Koan Golf beta</h3><p>Distances are estimates from public maps. Your data stays on your phone. Please send feedback.</p>
       <p class="muted" style="margin:0">Version ${APP_VERSION} · the Feedback link is at the top of every screen.</p><button class="btn" id="ok">Got it</button>`);
     $("#ok", md).onclick = () => { Store.set("betaSeen", true); md.remove(); res(); };
   });
@@ -2377,9 +2387,13 @@ async function boot() {
   A.profile = Store.profile(); A.bag = Store.bag(); A.settings = Store.settings();
   if (location.hash === "#teelog") return teeLogPage();
   if (!A.index.length) await loadIndex();
+  hideSplash();                                            // before the beta note or welcome cards
   if (!Store.get("betaSeen", false)) await betaNote();
   if (!A.profile.name) { if (!Store.get("tourSeen", false)) await welcomeCards("Set up my bag"); return setupWizard(); }
   return home();
 }
 
-boot().catch(e => { app.innerHTML = `<div class="body"><div class="card"><h3>Couldn't load course data</h3><p>${esc(e.message)}</p></div></div>`; });
+// the splash shows for at least ~0.8 s after the page starts, then fades out
+function hideSplash() { const sp = document.getElementById("splash"); if (!sp || hideSplash.done) return; hideSplash.done = true;
+  setTimeout(() => { sp.classList.add("out"); setTimeout(() => sp.remove(), 500); }, Math.max(0, 800 - performance.now())); }
+boot().finally(hideSplash).catch(e => { app.innerHTML = `<div class="body"><div class="card"><h3>Couldn't load course data</h3><p>${esc(e.message)}</p></div></div>`; });

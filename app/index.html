@@ -3,24 +3,24 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
-<title>Driven Golf</title>
+<title>Koan Golf</title>
 <!-- script ?v= matches APP_VERSION in js/store.js: bump both on every release so phones never mix old and new files -->
-<!-- home-screen app: "Add to Home Screen" opens full screen as "Driven Golf" -->
-<link rel="manifest" href="manifest.webmanifest?v=0.10.1-beta">
+<!-- home-screen app: "Add to Home Screen" opens full screen as "Koan Golf" -->
+<link rel="manifest" href="manifest.webmanifest?v=0.11.0-beta">
 <meta name="theme-color" content="#1E3A2B">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Driven Golf">
+<meta name="apple-mobile-web-app-title" content="Koan Golf">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="icon" type="image/png" href="icons/favicon.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=0.11.0-beta">
+<link rel="icon" type="image/png" href="icons/favicon.png?v=0.11.0-beta">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/leaflet-rotate@0.2.8/dist/leaflet-rotate-src.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400;1,500&family=Jost:wght@400;500;600&display=swap">
 <style>
-  /* Driven Golf · Clubhouse Classic */
+  /* Koan Golf · Clubhouse Classic */
   :root {
     --hunter: #1E3A2B; --ivory: #F6F1E4; --paper: #FFFDF7; --brass: #B08D57; --claret: #7A1F2B; --lake: #3E6E8E; --ink: #1B1B18; --muted: #6B6457; --rule: #E3DAC6;
     --head: "Plus Jakarta Sans", system-ui, sans-serif; --text: "Jost", system-ui, sans-serif;
@@ -105,7 +105,18 @@
   .modal h3 { font: 300 24px var(--head); }
   .modal .item.hit b, .item.hit b { color: var(--claret); }
 
-  /* crest + wordmark */
+  /* the Enso mark + wordmarks. Full wordmark: KOAN (Plus Jakarta Sans Light, ~0.26em) over GOLF (Jost, ~0.6em),
+     GOLF in brass on dark, muted gray on light */
+  .kwm { display: inline-flex; flex-direction: column; align-items: center; line-height: 1; }
+  .kwm b { font: 300 var(--kw, 34px)/1 "Plus Jakarta Sans", sans-serif; letter-spacing: .26em; margin-right: -.26em; color: var(--ivory); }
+  .kwm i { font: 500 calc(var(--kw, 34px) * .3)/1 Jost, sans-serif; font-style: normal; letter-spacing: .6em; margin-right: -.6em; color: var(--brass); margin-top: calc(var(--kw, 34px) * .3); }
+  .kwm.light b { color: var(--hunter); } .kwm.light i { color: var(--muted); }
+  #splash { position: fixed; inset: 0; z-index: 6000; background: var(--hunter); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; padding: 24px; text-align: center; transition: opacity .45s ease; }
+  #splash.out { opacity: 0; pointer-events: none; }
+  #splash .stag { margin: 0; font: italic 300 15px/1.4 var(--head); color: #E6DFCC; max-width: 280px; text-wrap: balance; }
+  .tbrand { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+  .tbrand .ttag { font: italic 300 15px/1.4 var(--head); color: var(--muted); margin: 0; text-wrap: balance; max-width: 300px; }
+  .ttop .enso { display: block; }
   .crest { display: block; flex: 0 0 auto; }
   .wordmark { display: flex; flex-direction: column; line-height: 1.1; }
   .wordmark b { font: 300 15px var(--head); letter-spacing: .32em; text-transform: uppercase; }
@@ -388,11 +399,20 @@
 </style>
 </head>
 <body>
+<!-- splash: the Enso and the full wordmark while the app starts (removed by boot in app.js) -->
+<div id="splash" aria-hidden="true"><svg width="148" height="148" viewBox="0 0 170 170">
+  <path d="M118 28 C88 10 40 18 24 58 C8 98 34 146 80 150 C122 154 152 122 150 84 C149 66 142 52 132 42" fill="none" stroke="#B08D57" stroke-width="13" stroke-linecap="round"/>
+  <path d="M126 36 C100 20 52 24 34 60" fill="none" stroke="#B08D57" stroke-width="5" stroke-linecap="round" opacity="0.55"/>
+  <path d="M30 104 C40 132 64 146 90 146" fill="none" stroke="#C9A773" stroke-width="3" stroke-linecap="round" opacity="0.6"/>
+  <path d="M85 112 V58" stroke="#F6F1E4" stroke-width="3" stroke-linecap="round"/>
+  <path d="M85 58 L104 65 L85 72 Z" fill="#9E2A38"/>
+  <ellipse cx="85" cy="113" rx="9" ry="3" fill="#F6F1E4" opacity="0.9"/>
+</svg><span class="kwm" style="--kw:46px"><b>KOAN</b><i>GOLF</i></span><p class="stag">Forever unsolved. Never perfected. Endlessly pursued.</p></div>
 <div id="app"></div>
-<script src="js/geo.js?v=0.10.1-beta"></script>
-<script src="js/store.js?v=0.10.1-beta"></script>
-<script src="js/drills.js?v=0.10.1-beta"></script>
-<script src="js/tour.js?v=0.10.1-beta"></script>
-<script src="js/app.js?v=0.10.1-beta"></script>
+<script src="js/geo.js?v=0.11.0-beta"></script>
+<script src="js/store.js?v=0.11.0-beta"></script>
+<script src="js/drills.js?v=0.11.0-beta"></script>
+<script src="js/tour.js?v=0.11.0-beta"></script>
+<script src="js/app.js?v=0.11.0-beta"></script>
 </body>
 </html>

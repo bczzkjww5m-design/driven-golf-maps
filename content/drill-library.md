@@ -1,4 +1,4 @@
-# Driven Golf — Practice Drill Library (v1)
+# Koan Golf — Practice Drill Library (v1)
 
 *Written October 11, 2026. Source content for the app's practice prescriptions. Every recommendation the app makes must point to a drill here, so the golfer is told how to practice, not just what to practice.*
 

@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------- first-time tour, location card, one-time tips
-// Welcome cards after the beta note (before setup); "How Driven Golf works" in Member Profile shows them again.
+// Welcome cards after the beta note (before setup); "How Koan Golf works" in Member Profile shows them again.
 // Existing members get a one-time "New: take the tour" note on the Clubhouse instead. Tips show once each (Reset tips
 // in Member Profile brings them back). Uses app.js helpers (el, $, esc, Store, modal, toast) at run time.
 const TOUR_ART = {
@@ -20,8 +20,8 @@ const tourArt = k => `<svg class="tart" viewBox="0 0 120 80" aria-hidden="true">
 // the swipeable cards; resolves when finished or skipped
 function welcomeCards(finalLabel = "Set up my bag") {
   return new Promise(res => {
-    const ov = el(`<div class="tour" role="dialog" aria-label="Welcome to Driven Golf"><div class="ttop"><span class="caps brass">Driven Golf</span><button class="linkbtn" id="tskip">Skip</button></div>
-      <div class="ttrack" id="ttrack">${TOUR_CARDS.map((c, i) => `<section class="tcard" aria-label="${i + 1} of ${TOUR_CARDS.length}">${tourArt(c.art)}<h2 class="ttl">${esc(c.title)}</h2><p>${esc(c.text)}</p></section>`).join("")}</div>
+    const ov = el(`<div class="tour" role="dialog" aria-label="Welcome to Koan Golf"><div class="ttop">${ENSO(30, true)}<button class="linkbtn" id="tskip">Skip</button></div>
+      <div class="ttrack" id="ttrack">${TOUR_CARDS.map((c, i) => `<section class="tcard" aria-label="${i + 1} of ${TOUR_CARDS.length}">${i ? tourArt(c.art) : `<div class="tbrand">${ENSO(124, true)}${WORDMARK_FULL(true, 34)}<p class="ttag">${TAGLINE}</p></div>`}<h2 class="ttl">${esc(c.title)}</h2><p>${esc(c.text)}</p></section>`).join("")}</div>
       <div class="tdots">${TOUR_CARDS.map((_, i) => `<i data-i="${i}"></i>`).join("")}</div><button class="btn" id="tnext">Next</button></div>`);
     document.body.appendChild(ov);
     const tr = $("#ttrack", ov), btn = $("#tnext", ov), at = () => Math.round(tr.scrollLeft / Math.max(1, tr.clientWidth));
@@ -38,7 +38,7 @@ function locationCard() {
   if (Store.get("locOk", false)) return Promise.resolve(true);
   return new Promise(res => {
     const md = modal(`${tourArt("course")}<h3 style="margin:0">Location is only for yardages</h3>
-      <p>Driven Golf uses your phone's location to measure yardages to the green and hazards, and to mark where your ball is. It stays on this phone: nothing is sent anywhere or shared.</p>
+      <p>Koan Golf uses your phone's location to measure yardages to the green and hazards, and to mark where your ball is. It stays on this phone: nothing is sent anywhere or shared.</p>
       <p class="muted">Your phone asks next. You can change it any time in your browser's settings, and you can always tap the map instead.</p>
       <div class="row"><button class="btn alt" id="ln">Not now</button><button class="btn" id="ly">Continue</button></div>`);
     $("#ly", md).onclick = () => { Store.set("locOk", true); md.remove(); res(true); };

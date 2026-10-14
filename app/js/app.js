@@ -507,7 +507,7 @@ function feedbackHref() {
 const feedbackLink = () => `<a class="fb" href="${feedbackHref()}">Feedback</a>`;
 function screen(title, back, body, where = {}, opts = {}) {
   const sc = shell({ screen: title, ...where }, opts.tab || A.tab || "home", opts.tabs !== false);
-  const s = el(`<div class="bar">${back ? '<button class="back" aria-label="Back">‹</button>' : ""}<h1>${esc(title)}</h1>${feedbackLink()}</div>`);
+  const s = el(`<div class="bar">${back ? '<button class="back" aria-label="Back">‹</button>' : ""}<h1>${esc(title)}</h1></div>`);
   const bd = el(`<div class="body"></div>`); sc.append(s, bd);
   if (back) $(".back", s).onclick = back;
   if (typeof body === "string") bd.innerHTML = body; return bd;
@@ -609,7 +609,7 @@ async function home() {
   else if (lastR && meta(lastR.course).name) next = { slug: lastR.course, tees: lastR.tees, why: "Last played" };
   else { const slug = pr.homeCourse || A.index[0].slug, c = await loadCourse(slug); next = { slug, tees: pr.prefTees?.[slug] || c.teeOrder[0], why: "Your home course" }; }
   const nm = meta(next.slug), hc = pr.homeCourse ? meta(pr.homeCourse) : null;
-  sc.appendChild(el(`<div class="hero"><div class="top">${ENSO_MARK(34)}<div class="grow">${WORDMARK}</div>${feedbackLink()}<button class="avatar" id="av" aria-label="Member Profile">${esc(initials(pr.name))}</button></div>
+  sc.appendChild(el(`<div class="hero"><div class="top">${ENSO_MARK(34)}<div class="grow"><span class="wordmark"><b>Koan Golf</b></span></div><button class="avatar" id="av" aria-label="Member Profile">${esc(initials(pr.name))}</button></div>
     <div class="caps eyebrow">The Clubhouse</div>
     <h1>${greeting()}${pr.name ? `, ${esc(pr.name.split(" ")[0])}` : ""}.</h1>
     <div class="caps hcpline">${pr.hcp !== "" && pr.hcp != null ? `Handicap ${esc(pr.hcp)}` : "Handicap —"}${hc ? ` · ${esc(hc.name)}` : ""}</div></div>`));
@@ -620,7 +620,7 @@ async function home() {
   const nu = el(`<div class="card nextup"><div class="muted it">${esc(next.why)}</div><div class="cname">${esc(nm.name)}</div>
     <div class="muted">${esc(nm.course)} · ${esc(next.tees)} tees</div>
     <button class="btn" id="go">Tee off</button>
-    <div class="split"><button class="linkbtn" id="pl">Plan a round</button><button class="linkbtn" id="pr">Practice</button></div></div>`);
+    <div class="row"><button class="btn alt" id="pl">Plan a round</button><button class="btn alt" id="pr">Practice</button></div></div>`);
   $("#go", nu).onclick = () => startRound(next.slug, next.tees);
   $("#pl", nu).onclick = planWizard;
   $("#pr", nu).onclick = () => nm.practice ? (location.href = nm.practice) : practicePage();
@@ -763,7 +763,7 @@ async function coursePage(slug) {
   const prefTee = A.settings.prefTees?.[slug];
   let tee = [prefTee, Store.get("lastTee:" + slug, null), course.teeOrder[0]].find(t => t && course.teeOrder.includes(t));
   const [city, st] = m.city.split(",").map(x => x.trim());
-  sc.appendChild(el(`<div class="chead"><div style="display:flex;align-items:center;gap:10px"><button class="iconbtn" id="bk" aria-label="Back">‹</button><span style="flex:1"></span>${feedbackLink()}${ENSO_MARK(26)}</div>
+  sc.appendChild(el(`<div class="chead"><div style="display:flex;align-items:center;gap:10px"><button class="iconbtn" id="bk" aria-label="Back">‹</button><span style="flex:1"></span>${ENSO_MARK(26)}</div>
     <h1>${esc(m.name)}</h1><div class="caps sub2">${esc(city)}${st ? `, ${esc(st)}` : ""} · Par ${course.par.reduce((a, c) => a + c, 0)}${m.course && !/^Championship|^18 holes/.test(m.course) ? ` · ${esc(m.course)}` : ""}</div></div>`));
   $("#bk", sc).onclick = () => (A.tab === "play" ? playPage() : home());
   const b = el(`<div class="body"></div>`); sc.appendChild(b);
@@ -1077,18 +1077,28 @@ function profilePage() {
   b.appendChild(tbl);
   const notes = bagWarnings(A.bag);
   if (notes.length) b.appendChild(el(`<div>${notes.map(t => `<div class="gapnote">${esc(t)}</div>`).join("")}</div>`));
-  const last = daysSince(Store.get("lastExport", null));
   const acts = el(`<div class="row"><button class="btn alt" id="ec">Edit clubs</button><button class="btn alt" id="ex">Export data</button></div>`);
   $("#ec", acts).onclick = () => profileEdit("bag"); $("#ex", acts).onclick = exportData; b.appendChild(acts);
-  const data = el(`<p class="muted it" style="margin:0">Saved on this phone only. Export a backup about once a month${last == null ? " (no backup yet)" : ` (last one ${last} day${last === 1 ? "" : "s"} ago)`}. <button class="linkbtn" id="im">Import data</button> · Koan Golf ${APP_VERSION}</p>`);
-  $("#im", data).onclick = importData; b.appendChild(data);
   b.appendChild(el(`<h2>Help</h2>`));
   const help = el(`<div class="list"><div class="item" id="hw"><div class="grow"><b>How Koan Golf works</b><small>The five welcome cards again</small></div><span>›</span></div>
-    <div class="item" id="rt"><div class="grow"><b>Reset tips</b><small>Show the one-time tips again on the hole, plan and practice screens</small></div><span>›</span></div></div>`);
+    <div class="item" id="rt"><div class="grow"><b>Reset tips</b><small>Show the one-time tips again on the hole, plan and practice screens</small></div><span>›</span></div>
+    <a class="item" style="color:inherit" href="${feedbackHref()}"><div class="grow"><b>Send feedback</b><small>An email to the team, with your app version and screen filled in</small></div><span>›</span></a></div>`);
   $("#hw", help).onclick = async () => { await welcomeCards("Back to my profile"); profilePage(); };
   $("#rt", help).onclick = resetTips; b.appendChild(help);
   b.appendChild(el(`<h2>Mapping</h2>`));
   b.appendChild(el(`<div class="list"><a class="item" style="text-decoration:none;color:inherit" href="../handmap/great28.html"><div class="grow"><b>Map the Great 28</b><small>Tap each hole's tee and green on the aerial, then send Claude the file</small></div><span>›</span></a></div>`));
+  const about = el(`<div class="list"><div class="item" id="ab"><div class="grow"><b>About & data</b><small>Koan Golf ${APP_VERSION} · backups and import</small></div><span>›</span></div></div>`);
+  $("#ab", about).onclick = aboutPage; b.appendChild(about);
+}
+// About & data: the version, where data lives, backups (export / import)
+function aboutPage() {
+  const b = screen("About & data", profilePage, "", { screen: "About & data" }), last = daysSince(Store.get("lastExport", null));
+  const card = el(`<div class="card"><div style="display:flex;align-items:center;gap:12px">${ENSO_MARK(40)}<div><b style="font:500 18px var(--head)">Koan Golf</b><div class="muted">Version ${APP_VERSION}</div></div></div>
+    <p class="muted it" style="margin:0">${TAGLINE}</p></div>`);
+  const data = el(`<div class="card"><h3 style="margin:0">Your data</h3><p style="margin:0">Everything is saved on this phone only. Export a backup about once a month${last == null ? " (no backup yet)" : ` (last one ${last} day${last === 1 ? "" : "s"} ago)`}.</p>
+    <div class="row"><button class="btn alt" id="ex">Export data</button><button class="btn alt" id="im">Import data</button></div></div>`);
+  $("#ex", data).onclick = exportData; $("#im", data).onclick = importData;
+  b.append(card, data);
 }
 
 // ---------------------------------------------------------------- rounds & plans: create
@@ -2175,7 +2185,7 @@ async function holeView(ctx) {
         <div class="row"><button class="btn alt small" id="pen">Other penalty +1${pn.other ? ` (${pn.other})` : ""}</button><button class="btn alt small" id="undo">Undo last shot</button></div>`) + navBtns("Finish round");
     }
     if (view === "green") { cmp = `<div class="gcmp"><div class="gl">${cmp}</div>${presetGridHTML()}</div>`; half = (slopeHTML() ? sec("Slopes", slopeHTML()) : "") + half; }
-    sh.innerHTML = `<div class="grab" role="button" aria-label="Drag up for more, tap to step up"></div><div class="cmp">${cmp}</div><div class="more">${half}</div><div class="more">${full}<div class="fbrow">${feedbackLink()}</div></div>`;
+    sh.innerHTML = `<div class="grab" role="button" aria-label="Drag up for more, tap to step up"></div><div class="cmp">${cmp}</div><div class="more">${half}</div><div class="more">${full}</div>`;
     // the compact block sets the folded height: everything above the half-height extras, plus the bottom padding
     const c = $(".cmp", sh); sheetMin = Math.round(c.offsetTop + c.offsetHeight + parseFloat(getComputedStyle(sh).paddingBottom) + 2);
     bindSheetDrag(sh);

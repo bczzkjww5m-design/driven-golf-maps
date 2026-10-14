@@ -6,14 +6,14 @@
 <title>Koan Golf</title>
 <!-- script ?v= matches APP_VERSION in js/store.js: bump both on every release so phones never mix old and new files -->
 <!-- home-screen app: "Add to Home Screen" opens full screen as "Koan Golf" -->
-<link rel="manifest" href="manifest.webmanifest?v=0.11.0-beta">
+<link rel="manifest" href="manifest.webmanifest?v=0.11.1-beta">
 <meta name="theme-color" content="#1E3A2B">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Koan Golf">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=0.11.0-beta">
-<link rel="icon" type="image/png" href="icons/favicon.png?v=0.11.0-beta">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=0.11.1-beta">
+<link rel="icon" type="image/png" href="icons/favicon.png?v=0.11.1-beta">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/leaflet-rotate@0.2.8/dist/leaflet-rotate-src.js"></script>
@@ -68,7 +68,7 @@
   .row { display: flex; gap: 8px; flex-wrap: wrap; }
   .row > .btn { flex: 1; }
   .chips { display: flex; gap: 6px; flex-wrap: wrap; }
-  .chip { border: 1px solid var(--hunter); background: transparent; border-radius: 0; min-height: 44px; padding: 8px 12px; font: 500 13px var(--text); letter-spacing: .04em; cursor: pointer; color: var(--hunter); }
+  .chip { border: 1px solid var(--hunter); background: transparent; border-radius: 0; min-height: 44px; padding: 8px 12px; font: 500 13px var(--text); letter-spacing: 0; cursor: pointer; color: var(--hunter); }
   .chip.on { background: var(--hunter); color: var(--ivory); }
   .chip.warn { border-color: var(--yellow); }
   /* lists: thin rules, not cards */
@@ -84,7 +84,7 @@
   table.t th { text-align: left; color: var(--muted); font-weight: 600; padding: 6px 4px; border-bottom: 1px solid var(--rule); letter-spacing: .1em; text-transform: uppercase; font-size: 11px; }
   table.t td { padding: 7px 4px; border-bottom: 1px solid var(--rule); vertical-align: top; }
   .tablewrap { overflow-x: auto; }
-  .pill { display: inline-block; font: 600 11px var(--text); letter-spacing: .08em; padding: 2px 7px; border: 1px solid currentColor; }
+  .pill { display: inline-block; font: 600 11px var(--text); letter-spacing: 0; padding: 2px 7px; border: 1px solid currentColor; }
   .pill.red { color: var(--claret); } .pill.yellow { color: #8A6A1F; } .pill.ok { color: var(--hunter); } .pill.blue { color: var(--lake); } .pill.lime { color: var(--brass); }
   .stat { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0; border-top: 1px solid var(--rule); }
   .stat div { padding: 12px 4px; border-bottom: 1px solid var(--rule); }
@@ -93,10 +93,10 @@
   label.f { display: flex; flex-direction: column; gap: 6px; font: 600 11px var(--text); letter-spacing: .18em; text-transform: uppercase; color: var(--muted); }
   input, select, textarea { font: 400 16px var(--text); min-height: 44px; padding: 9px 12px; border-radius: 0; border: 1px solid var(--rule); border-bottom-color: var(--brass); background: var(--paper); color: var(--ink);
                             letter-spacing: 0; text-transform: none; -webkit-user-select: text; user-select: text; }
-  a { color: var(--claret); }
+  a { color: var(--claret); text-decoration: none; }
   .warn { background: var(--paper); border-left: 3px solid #A8862F; color: #5E4A17; padding: 10px 12px; font-size: 13.5px; }
   .warn.red { border-left-color: var(--claret); color: var(--claret); }
-  .linkbtn { all: unset; cursor: pointer; color: var(--claret); font: 500 13px var(--text); text-decoration: underline; text-underline-offset: 3px; }
+  .linkbtn { all: unset; cursor: pointer; color: var(--claret); font: 600 13px var(--text); text-decoration: none; }
   .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(env(safe-area-inset-bottom, 0px) + 86px); background: var(--hunter); color: var(--ivory); border: 1px solid var(--brass);
            padding: 11px 16px; z-index: 5000; font-size: 14px; }
   .modal { position: fixed; inset: 0; background: #1B1B1873; z-index: 4000; display: flex; align-items: flex-end; justify-content: center; }
@@ -126,7 +126,7 @@
   .tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 900; background: var(--hunter); border-top: 3px double var(--brass);
           padding: 4px 6px calc(env(safe-area-inset-bottom, 0px) + 4px); display: flex; justify-content: space-around; }
   .tabs button { all: unset; cursor: pointer; flex: 1; min-height: 56px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
-                 font: 600 10px var(--text); letter-spacing: .18em; color: #CFC6B2; }
+                 font: 600 10px var(--text); letter-spacing: .18em; text-transform: uppercase; color: #CFC6B2; }
   .tabs button svg { width: 22px; height: 22px; }
   .tabs button.on { color: var(--ivory); }
   .tabs .dot { width: 22px; height: 2px; background: transparent; }
@@ -146,6 +146,9 @@
   .split > * + * { border-left: 1px solid var(--rule); }
   .bigstat { font: 300 44px/1 var(--head); color: var(--claret); }
   .focus { display: flex; gap: 16px; align-items: center; cursor: pointer; }
+  .focus.empty { flex-direction: column; text-align: center; gap: 10px; padding: 22px 18px; }
+  .focus.empty p { margin: 0; color: var(--muted); max-width: 290px; text-wrap: balance; }
+  .emptyart { width: 44px; height: 44px; fill: none; stroke: var(--hunter); stroke-width: 1.6; stroke-linecap: round; } .emptyart .b { stroke: var(--brass); }
   .focus b { font: 500 17px var(--head); display: block; } .focus small { color: var(--muted); font-size: 13.5px; }
   .ccard, .hscroll, .fi { display: none; }
 
@@ -161,8 +164,8 @@
   .teetable .yd { text-align: right; font: 300 18px var(--head); }
   .teetable tr.on td { background: var(--hunter); color: var(--ivory); } .teetable tr.on .tn i { color: var(--brass); }
   .scorecard { border-collapse: collapse; width: 100%; font: 400 12.5px var(--text); text-align: center; background: var(--paper); }
-  .scorecard th { background: var(--hunter); color: var(--ivory); font: 600 10.5px var(--text); letter-spacing: .1em; padding: 6px 2px; border: 1px solid var(--hunter); }
-  .scorecard td { padding: 6px 2px; border: 1px solid var(--rule); } .scorecard td:first-child, .scorecard th:first-child { text-align: left; padding-left: 6px; font-weight: 600; letter-spacing: .1em; font-size: 10.5px; }
+  .scorecard th { background: var(--hunter); color: var(--ivory); font: 600 10.5px var(--text); letter-spacing: .1em; text-transform: uppercase; padding: 6px 2px; border: 1px solid var(--hunter); }
+  .scorecard td { padding: 6px 2px; border: 1px solid var(--rule); } .scorecard td:first-child, .scorecard th:first-child { text-align: left; padding-left: 6px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; font-size: 10.5px; }
   .scorecard .out { font-weight: 600; background: #F1EBDB; }
   .navrow { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 8px 0; border-bottom: 1px solid var(--rule); cursor: pointer; }
   .navrow:last-child { border-bottom: 0; }
@@ -180,7 +183,7 @@
   .hhead .mid button.nav { all: unset; cursor: pointer; width: 36px; height: 44px; display: grid; place-items: center; font-size: 22px; color: var(--brass); }
   .hhead .ttl { all: unset; cursor: pointer; min-width: 0; display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
   .hhead .ttl b { font: 300 21px/1 var(--head); color: var(--ivory); }
-  .hhead .ttl span { color: var(--brass); font-size: 10px; letter-spacing: .16em; overflow: hidden; text-overflow: ellipsis; }
+  .hhead .ttl span { color: var(--brass); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; }
   .mapwrap { position: relative; flex: 1; min-height: 0; }
   #map { position: absolute; inset: 0; background: #EDE6D2; -webkit-touch-callout: none; }
   .fl { position: absolute; z-index: 600; }
@@ -280,7 +283,7 @@
   .lierow { display: flex; align-items: center; gap: 8px; font-size: 13px; min-height: 26px; }
   .liechip { all: unset; cursor: pointer; border: 1px solid var(--hunter); color: var(--hunter); padding: 2px 9px; font: 500 13px var(--head); }
   .liechip.guess { border-style: dashed; border-color: var(--brass); color: var(--claret); font-style: italic; }
-  .liealt { all: unset; cursor: pointer; color: var(--claret); font: 500 13px var(--text); text-decoration: underline; text-underline-offset: 3px; padding: 4px 2px; }
+  .liealt { all: unset; cursor: pointer; color: var(--claret); font: 600 13px var(--text); text-decoration: none; padding: 4px 2px; }
   .penrow { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; font-size: 13px; min-height: 26px; color: var(--claret); }
   .penrow span { flex: 1 1 auto; } .penrow b { color: #C62828; font-family: var(--head); font-weight: 600; }
   /* Map key and hazard editor rows */
@@ -340,7 +343,7 @@
   .bagrow .r2 label { display: flex; flex-direction: column; font: 600 10px var(--text); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); } .bagrow .r2 input[type=number] { width: 78px; }
   .bagrow .roll, .bagrow .sl { font-size: 12px; color: var(--muted); min-width: 60px; } .bagrow .chk { flex-direction: row !important; align-items: center; gap: 6px; font: 500 13px var(--text) !important; letter-spacing: 0 !important; text-transform: none !important; color: var(--ink) !important; }
   .learn { background: var(--paper); border-left: 3px solid var(--lake); color: var(--ink); padding: 10px 12px; font-size: 13.5px; display: flex; flex-direction: column; gap: 8px; }
-  .fb { color: var(--claret); font: 500 12px var(--text); text-decoration: underline; text-underline-offset: 3px; }
+  .fb { color: var(--claret); font: 600 12px var(--text); text-decoration: none; }
   .bar .fb, .hero .fb, .chead .fb, .phead .fb, .hhead .fb { color: #CFC6B2; }
   .fbrow { text-align: center; padding: 6px 0 2px; }
   .hzp { display: flex; flex-direction: column; gap: 4px; }
@@ -389,7 +392,7 @@
   .member .ix { font: 300 54px/1 var(--head); font-variant-numeric: lining-nums tabular-nums; }
   .member .btn.alt { color: var(--ivory); border-color: var(--brass); }
   .bagtbl { border-collapse: collapse; width: 100%; background: var(--paper); font-variant-numeric: lining-nums tabular-nums; }
-  .bagtbl th { background: var(--hunter); color: var(--ivory); font: 600 10.5px var(--text); letter-spacing: .18em; padding: 8px 6px; text-align: right; }
+  .bagtbl th { background: var(--hunter); color: var(--ivory); font: 600 10.5px var(--text); letter-spacing: .18em; text-transform: uppercase; padding: 8px 6px; text-align: right; }
   .bagtbl th:first-child, .bagtbl td:first-child { text-align: left; }
   .bagtbl td { padding: 8px 6px; border-bottom: 1px solid var(--rule); text-align: right; font-size: 14px; }
   .bagtbl td:first-child { font: 500 15px var(--head); } .bagtbl .tdot { display: inline-block; width: 7px; height: 7px; border-radius: 999px; background: var(--claret); }
@@ -409,10 +412,10 @@
   <ellipse cx="85" cy="113" rx="9" ry="3" fill="#F6F1E4" opacity="0.9"/>
 </svg><span class="kwm" style="--kw:46px"><b>KOAN</b><i>GOLF</i></span><p class="stag">Forever unsolved. Never perfected. Endlessly pursued.</p></div>
 <div id="app"></div>
-<script src="js/geo.js?v=0.11.0-beta"></script>
-<script src="js/store.js?v=0.11.0-beta"></script>
-<script src="js/drills.js?v=0.11.0-beta"></script>
-<script src="js/tour.js?v=0.11.0-beta"></script>
-<script src="js/app.js?v=0.11.0-beta"></script>
+<script src="js/geo.js?v=0.11.1-beta"></script>
+<script src="js/store.js?v=0.11.1-beta"></script>
+<script src="js/drills.js?v=0.11.1-beta"></script>
+<script src="js/tour.js?v=0.11.1-beta"></script>
+<script src="js/app.js?v=0.11.1-beta"></script>
 </body>
 </html>

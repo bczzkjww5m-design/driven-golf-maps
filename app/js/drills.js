@@ -196,7 +196,13 @@ function focusCard(container) {
   const card = el(`<div class="card focus"><div class="muted it">Reading your rounds…</div></div>`); container.appendChild(card);
   prescriptions().then(({ list }) => {
     const rx = list[0];
-    if (!rx) { card.innerHTML = `<div style="text-align:center;min-width:76px"><div class="bigstat">–</div></div><div style="border-left:1px solid var(--rule);padding-left:16px"><b>Play or practice to get a focus</b><small>Log a round (shots and putts) or a practice session, and your top thing to work on shows up here, with a drill.</small></div>`; card.style.cursor = "default"; return; }
+    if (!rx) {                                               // nothing logged yet: a real empty state, not a dash
+      card.classList.add("empty");
+      card.innerHTML = `<svg class="emptyart" viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="17"/><circle cx="24" cy="24" r="10"/><circle cx="24" cy="24" r="3" class="b"/><path d="M6 42l14-12"/></svg>
+        <p>Play a round or log a practice session and your focus will show here.</p><button class="btn alt small" id="sp0">Start practice</button>`;
+      card.style.cursor = "default";
+      $("#sp0", card).onclick = () => A.tab === "practice" ? $("#sesOut")?.closest(".card")?.scrollIntoView({ behavior: "smooth" }) : practicePage();
+      return; }
     card.innerHTML = `<div style="text-align:center;min-width:76px"><div class="bigstat">${esc(rx.stat)}</div><div class="caps" style="font-size:9.5px;color:var(--claret);margin-top:4px">${esc(rx.statLabel)}</div></div>
       <div style="border-left:1px solid var(--rule);padding-left:16px"><b>${esc(rx.weakness)}</b><small>${esc(rx.drill)} · ${esc(rx.time)}. Tap for the drill.</small></div>`;
     card.onclick = () => prescriptionPage(rx.drill, rx);
